@@ -307,3 +307,16 @@ pub fn PluginSecurityGuard::check_network(
     Err(SecurityError::PermissionDenied("Network forbidden: " + host))
   }
 }
+
+pub fn PluginSecurityGuard::consume_steps(
+  self : PluginSecurityGuard,
+  steps : Int
+) -> Result[Unit, SecurityError] {
+  self.consumed_steps = self.consumed_steps + steps
+  if self.consumed_steps > self.policy.quota.max_execution_steps {
+    let msg = "Instruction limit exceeded"
+    Err(SecurityError::OutOfQuota(msg))
+  } else {
+    Ok(())
+  }
+}
