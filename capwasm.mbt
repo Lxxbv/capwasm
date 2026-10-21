@@ -125,3 +125,27 @@ pub fn CapabilityPolicyBuilder::build(
     quota: self.quota,
   }
 }
+
+/// Helper function to check if a path contains directory traversal sequences ("..")
+fn contains_path_traversal(path : String) -> Bool {
+  let len = path.length()
+  for i = 0; i < len; i = i + 1 {
+    if path[i] == '.' && i + 1 < len && path[i + 1] == '.' {
+      return true
+    }
+  }
+  false
+}
+
+/// Helper function to test string prefix
+fn has_prefix(str : String, prefix : String) -> Bool {
+  if str.length() < prefix.length() {
+    return false
+  }
+  for i = 0; i < prefix.length(); i = i + 1 {
+    if str[i] != prefix[i] {
+      return false
+    }
+  }
+  true
+}
