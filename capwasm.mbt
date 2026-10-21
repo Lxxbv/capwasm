@@ -320,3 +320,13 @@ pub fn PluginSecurityGuard::consume_steps(
     Ok(())
   }
 }
+
+/// Extism-style Memory Slice Descriptor for Host-Plugin communication.
+pub(all) struct MemorySlice {
+  offset : Int
+  length : Int
+} derive(Debug, Eq)
+
+pub fn MemorySlice::new(offset : Int, length : Int) -> MemorySlice {
+  { offset, length }
+}
