@@ -149,3 +149,12 @@ fn has_prefix(str : String, prefix : String) -> Bool {
   }
   true
 }
+
+/// AuditRecord tracks every privileged host interaction requested by a plugin.
+pub(all) struct AuditRecord {
+  plugin_id : String
+  action : ActionType
+  target : String
+  allowed : Bool
+  reason : String
+} derive(Debug, Eq)
