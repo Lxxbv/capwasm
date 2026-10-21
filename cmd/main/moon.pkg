@@ -1,0 +1,5 @@
+import {
+  "Lxxbv/capwasm" @capwasm,
+}
+
+pkgtype(kind: "executable")
