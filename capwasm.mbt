@@ -158,3 +158,152 @@ pub(all) struct AuditRecord {
   allowed : Bool
   reason : String
 } derive(Debug, Eq)
+
+/// PluginSecurityGuard enforces capability checks and maintains audit logs.
+pub(all) struct PluginSecurityGuard {
+  plugin_id : String
+  policy : CapabilityPolicy
+  audit_logs : Array[AuditRecord]
+  mut consumed_steps : Int
+}
+
+pub fn PluginSecurityGuard::new(
+  plugin_id : String,
+  policy : CapabilityPolicy
+) -> PluginSecurityGuard {
+  {
+    plugin_id,
+    policy,
+    audit_logs: [],
+    consumed_steps: 0,
+  }
+}
+
+pub fn PluginSecurityGuard::get_audit_logs(
+  self : PluginSecurityGuard
+) -> Array[AuditRecord] {
+  self.audit_logs
+}
+
+pub fn PluginSecurityGuard::check_fs_read(
+  self : PluginSecurityGuard,
+  path : String
+) -> Result[Unit, SecurityError] {
+  if contains_path_traversal(path) {
+    let err = SecurityError::PathTraversalAttempt(path)
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::FsRead,
+      target: path,
+      allowed: false,
+      reason: "Path traversal attempt detected",
+    })
+    return Err(err)
+  }
+
+  let mut matched = false
+  for allowed in self.policy.allowed_read_paths {
+    if has_prefix(path, allowed) {
+      matched = true
+      break
+    }
+  }
+
+  if matched {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::FsRead,
+      target: path,
+      allowed: true,
+      reason: "Matched read allowlist",
+    })
+    Ok(())
+  } else {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::FsRead,
+      target: path,
+      allowed: false,
+      reason: "Path not in permitted read list",
+    })
+    Err(SecurityError::PermissionDenied("Path not allowed: " + path))
+  }
+}
+
+pub fn PluginSecurityGuard::check_fs_write(
+  self : PluginSecurityGuard,
+  path : String
+) -> Result[Unit, SecurityError] {
+  if contains_path_traversal(path) {
+    let err = SecurityError::PathTraversalAttempt(path)
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::FsWrite,
+      target: path,
+      allowed: false,
+      reason: "Path traversal attempt detected",
+    })
+    return Err(err)
+  }
+
+  let mut matched = false
+  for allowed in self.policy.allowed_write_paths {
+    if has_prefix(path, allowed) {
+      matched = true
+      break
+    }
+  }
+
+  if matched {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::FsWrite,
+      target: path,
+      allowed: true,
+      reason: "Matched write allowlist",
+    })
+    Ok(())
+  } else {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::FsWrite,
+      target: path,
+      allowed: false,
+      reason: "Path not in permitted write list",
+    })
+    Err(SecurityError::PermissionDenied("Write not allowed: " + path))
+  }
+}
+
+pub fn PluginSecurityGuard::check_network(
+  self : PluginSecurityGuard,
+  host : String
+) -> Result[Unit, SecurityError] {
+  let mut matched = false
+  for allowed in self.policy.allowed_network_hosts {
+    if host == allowed {
+      matched = true
+      break
+    }
+  }
+
+  if matched {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::NetConnect,
+      target: host,
+      allowed: true,
+      reason: "Host in network allowlist",
+    })
+    Ok(())
+  } else {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::NetConnect,
+      target: host,
+      allowed: false,
+      reason: "Host not in network allowlist",
+    })
+    Err(SecurityError::PermissionDenied("Network forbidden: " + host))
+  }
+}
