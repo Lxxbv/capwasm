@@ -1,3 +1,4 @@
+///|
 test "wbtest" {
   let builder = CapabilityPolicyBuilder::new()
   let policy = builder.allow_read_path("./docs/").build()

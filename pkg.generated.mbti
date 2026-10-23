@@ -1,0 +1,709 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Lxxbv/capwasm"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn canonicalize_path(String) -> Result[String, SecurityError]
+
+pub let page_size : Int
+
+pub fn parse_block_type(BinaryReader) -> Result[BlockType, DecodeError]
+
+pub fn parse_expression(BinaryReader) -> Result[Array[Instruction], DecodeError]
+
+pub fn parse_func_type(BinaryReader) -> Result[FuncType, DecodeError]
+
+pub fn parse_global_type(BinaryReader) -> Result[GlobalType, DecodeError]
+
+pub fn parse_instruction(BinaryReader) -> Result[Instruction, DecodeError]
+
+pub fn parse_limits(BinaryReader) -> Result[Limits, DecodeError]
+
+pub fn parse_mem_arg(BinaryReader) -> Result[MemArg, DecodeError]
+
+pub fn parse_value_type(Byte) -> Result[ValueType, DecodeError]
+
+pub let wasi_errno_access : Int
+
+pub let wasi_errno_badf : Int
+
+pub let wasi_errno_exist : Int
+
+pub let wasi_errno_inval : Int
+
+pub let wasi_errno_noent : Int
+
+pub let wasi_errno_overflow : Int
+
+pub let wasi_errno_success : Int
+
+// Errors
+
+// Types and methods
+pub(all) enum ActionType {
+  FsRead
+  FsWrite
+  NetConnect
+  ClockRead
+  EnvRead
+} derive(Eq, @debug.Debug)
+
+pub(all) struct AuditRecord {
+  plugin_id : String
+  action : ActionType
+  target : String
+  allowed : Bool
+  reason : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct BinaryReader {
+  bytes : Array[Byte]
+  mut pos : Int
+}
+pub fn BinaryReader::from_string(String) -> Self
+pub fn BinaryReader::get_position(Self) -> Int
+pub fn BinaryReader::has_more(Self) -> Bool
+pub fn BinaryReader::new(Array[Byte]) -> Self
+pub fn BinaryReader::peek_byte(Self) -> Result[Byte, DecodeError]
+pub fn BinaryReader::read_byte(Self) -> Result[Byte, DecodeError]
+pub fn BinaryReader::read_bytes(Self, Int) -> Result[Array[Byte], DecodeError]
+pub fn BinaryReader::read_i32(Self) -> Result[Int, DecodeError]
+pub fn BinaryReader::read_i64(Self) -> Result[Int64, DecodeError]
+pub fn BinaryReader::read_name(Self) -> Result[String, DecodeError]
+pub fn BinaryReader::read_u32(Self) -> Result[Int, DecodeError]
+pub fn BinaryReader::remaining(Self) -> Int
+pub fn BinaryReader::set_position(Self, Int) -> Result[Unit, DecodeError]
+
+pub(all) struct BinaryWriter {
+  bytes : Array[Byte]
+}
+pub fn BinaryWriter::length(Self) -> Int
+pub fn BinaryWriter::new() -> Self
+pub fn BinaryWriter::to_bytes(Self) -> Array[Byte]
+pub fn BinaryWriter::write_byte(Self, Byte) -> Unit
+pub fn BinaryWriter::write_bytes(Self, Array[Byte]) -> Unit
+pub fn BinaryWriter::write_i32(Self, Int) -> Unit
+pub fn BinaryWriter::write_name(Self, String) -> Unit
+pub fn BinaryWriter::write_u32(Self, Int) -> Unit
+
+pub(all) enum BlockType {
+  Empty
+  Value(ValueType)
+  FuncTypeIndex(Int)
+} derive(Eq)
+pub impl Show for BlockType
+
+pub(all) struct CallFrame {
+  func_index : Int
+  locals : Array[Value]
+  mut pc : Int
+  stack_base : Int
+  control_base : Int
+  result_types : Array[ValueType]
+}
+pub fn CallFrame::get_local(Self, Int) -> Result[Value, Trap]
+pub fn CallFrame::new(Int, Array[Value], Int, Int, Array[ValueType]) -> Self
+pub fn CallFrame::set_local(Self, Int, Value) -> Result[Unit, Trap]
+
+pub(all) struct CapabilityPolicy {
+  allowed_read_paths : Array[String]
+  allowed_write_paths : Array[String]
+  allowed_network_hosts : Array[String]
+  allow_clock : Bool
+  allowed_env_vars : Array[String]
+  quota : ResourceQuota
+} derive(@debug.Debug)
+pub fn CapabilityPolicy::builder() -> CapabilityPolicyBuilder
+
+pub(all) struct CapabilityPolicyBuilder {
+  mut read_paths : Array[String]
+  mut write_paths : Array[String]
+  mut hosts : Array[String]
+  mut allow_clock : Bool
+  mut env_vars : Array[String]
+  mut quota : ResourceQuota
+}
+pub fn CapabilityPolicyBuilder::allow_clock(Self, Bool) -> Self
+pub fn CapabilityPolicyBuilder::allow_network_host(Self, String) -> Self
+pub fn CapabilityPolicyBuilder::allow_read_path(Self, String) -> Self
+pub fn CapabilityPolicyBuilder::allow_write_path(Self, String) -> Self
+pub fn CapabilityPolicyBuilder::build(Self) -> CapabilityPolicy
+pub fn CapabilityPolicyBuilder::new() -> Self
+pub fn CapabilityPolicyBuilder::set_quota(Self, ResourceQuota) -> Self
+
+pub(all) enum ControlBlockType {
+  Block(BlockType)
+  Loop(BlockType)
+  If(BlockType)
+  Function(FuncType)
+} derive(Eq)
+pub impl Show for ControlBlockType
+
+pub(all) struct ControlFrame {
+  kind : ControlBlockType
+  stack_height : Int
+  continuation_pc : Int
+  loop_pc : Int?
+} derive(Eq)
+pub fn ControlFrame::new(ControlBlockType, Int, Int, Int?) -> Self
+
+pub(all) struct DataSegment {
+  mem_index : Int
+  offset_expr : Array[Instruction]
+  data : Array[Byte]
+} derive(Eq)
+pub fn DataSegment::new(Int, Array[Instruction], Array[Byte]) -> Self
+pub impl Show for DataSegment
+
+pub(all) enum DecodeError {
+  UnexpectedEof(String)
+  InvalidMagic
+  InvalidVersion(Int)
+  InvalidSectionId(Int)
+  InvalidValueType(Int)
+  InvalidMutability(Int)
+  InvalidLimits(Int)
+  InvalidOpcode(Int)
+  Leb128Overflow
+  SectionSizeMismatch(Int, Int)
+  InvalidUtf8
+  MalformedModule(String)
+} derive(Eq, @debug.Debug)
+pub impl Show for DecodeError
+
+pub(all) struct ElementSegment {
+  table_index : Int
+  offset_expr : Array[Instruction]
+  func_indices : Array[Int]
+} derive(Eq)
+pub fn ElementSegment::new(Int, Array[Instruction], Array[Int]) -> Self
+pub impl Show for ElementSegment
+
+pub(all) enum ExportDesc {
+  Func(Int)
+  Table(Int)
+  Mem(Int)
+  Global(Int)
+} derive(Eq)
+pub impl Show for ExportDesc
+
+pub(all) struct ExportEntry {
+  name : String
+  desc : ExportDesc
+} derive(Eq)
+pub fn ExportEntry::new(String, ExportDesc) -> Self
+pub impl Show for ExportEntry
+
+pub(all) struct FuncType {
+  params : Array[ValueType]
+  results : Array[ValueType]
+} derive(Eq)
+pub fn FuncType::new(Array[ValueType], Array[ValueType]) -> Self
+pub impl Show for FuncType
+
+pub(all) struct FunctionBody {
+  locals : Array[LocalDecl]
+  instructions : Array[Instruction]
+} derive(Eq)
+pub fn FunctionBody::new(Array[LocalDecl], Array[Instruction]) -> Self
+pub impl Show for FunctionBody
+
+pub(all) enum FunctionInstance {
+  Defined(FuncType, FunctionBody)
+  Host(HostFunction)
+}
+
+pub(all) struct GlobalEntry {
+  global_type : GlobalType
+  init_expr : Array[Instruction]
+} derive(Eq)
+pub fn GlobalEntry::new(GlobalType, Array[Instruction]) -> Self
+pub impl Show for GlobalEntry
+
+pub(all) struct GlobalInstance {
+  mut val : Value
+  mutability : Mutability
+}
+pub fn GlobalInstance::new(Value, Mutability) -> Self
+
+pub(all) struct GlobalType {
+  val_type : ValueType
+  mutability : Mutability
+} derive(Eq)
+pub fn GlobalType::new(ValueType, Mutability) -> Self
+pub impl Show for GlobalType
+
+pub(all) struct HostContext {
+  plugin_id : String
+  mut memory : LinearMemory?
+  mut sec_guard : PluginSecurityGuard?
+}
+pub fn HostContext::get_guard(Self) -> Result[PluginSecurityGuard, Trap]
+pub fn HostContext::get_memory(Self) -> Result[LinearMemory, Trap]
+pub fn HostContext::new(String) -> Self
+pub fn HostContext::set_guard(Self, PluginSecurityGuard) -> Unit
+pub fn HostContext::set_memory(Self, LinearMemory) -> Unit
+
+pub(all) struct HostFunction {
+  func_type : FuncType
+  callback : (HostContext, Array[Value]) -> Result[Array[Value], Trap]
+}
+pub fn HostFunction::new(FuncType, (HostContext, Array[Value]) -> Result[Array[Value], Trap]) -> Self
+
+pub(all) enum ImportDesc {
+  Func(Int)
+  Table(TableType)
+  Mem(MemoryType)
+  Global(GlobalType)
+} derive(Eq)
+pub impl Show for ImportDesc
+
+pub(all) struct ImportEntry {
+  mod_name : String
+  field_name : String
+  desc : ImportDesc
+} derive(Eq)
+pub fn ImportEntry::new(String, String, ImportDesc) -> Self
+pub impl Show for ImportEntry
+
+pub(all) struct InMemoryDirectory {
+  path : String
+  subdirectories : Array[String]
+  files : Array[String]
+}
+pub fn InMemoryDirectory::new(String) -> Self
+
+pub(all) struct InMemoryFile {
+  path : String
+  mut data : Array[Byte]
+  mut cursor : Int
+  mut is_open : Bool
+}
+pub fn InMemoryFile::new(String, Array[Byte]) -> Self
+pub fn InMemoryFile::read(Self, Int) -> Array[Byte]
+pub fn InMemoryFile::seek(Self, Int, Int) -> Result[Int, Int]
+pub fn InMemoryFile::write(Self, Array[Byte]) -> Int
+
+pub(all) enum Instruction {
+  Unreachable
+  Nop
+  Block(BlockType)
+  Loop(BlockType)
+  If(BlockType)
+  Else
+  End
+  Br(Int)
+  BrIf(Int)
+  BrTable(Array[Int], Int)
+  Return
+  Call(Int)
+  CallIndirect(Int, Int)
+  Drop
+  Select
+  LocalGet(Int)
+  LocalSet(Int)
+  LocalTee(Int)
+  GlobalGet(Int)
+  GlobalSet(Int)
+  I32Load(MemArg)
+  I64Load(MemArg)
+  F32Load(MemArg)
+  F64Load(MemArg)
+  I32Load8S(MemArg)
+  I32Load8U(MemArg)
+  I32Load16S(MemArg)
+  I32Load16U(MemArg)
+  I64Load8S(MemArg)
+  I64Load8U(MemArg)
+  I64Load16S(MemArg)
+  I64Load16U(MemArg)
+  I64Load32S(MemArg)
+  I64Load32U(MemArg)
+  I32Store(MemArg)
+  I64Store(MemArg)
+  F32Store(MemArg)
+  F64Store(MemArg)
+  I32Store8(MemArg)
+  I32Store16(MemArg)
+  I64Store8(MemArg)
+  I64Store16(MemArg)
+  I64Store32(MemArg)
+  MemorySize
+  MemoryGrow
+  I32Const(Int)
+  I64Const(Int64)
+  F32Const(Float)
+  F64Const(Double)
+  I32Eqz
+  I32Eq
+  I32Ne
+  I32LtS
+  I32LtU
+  I32GtS
+  I32GtU
+  I32LeS
+  I32LeU
+  I32GeS
+  I32GeU
+  I32Clz
+  I32Ctz
+  I32Popcnt
+  I32Add
+  I32Sub
+  I32Mul
+  I32DivS
+  I32DivU
+  I32RemS
+  I32RemU
+  I32And
+  I32Or
+  I32Xor
+  I32Shl
+  I32ShrS
+  I32ShrU
+  I32Rotl
+  I32Rotr
+  I64Eqz
+  I64Eq
+  I64Ne
+  I64LtS
+  I64LtU
+  I64GtS
+  I64GtU
+  I64LeS
+  I64LeU
+  I64GeS
+  I64GeU
+  I64Clz
+  I64Ctz
+  I64Popcnt
+  I64Add
+  I64Sub
+  I64Mul
+  I64DivS
+  I64DivU
+  I64RemS
+  I64RemU
+  I64And
+  I64Or
+  I64Xor
+  I64Shl
+  I64ShrS
+  I64ShrU
+  I64Rotl
+  I64Rotr
+  I32WrapI64
+  I64ExtendI32S
+  I64ExtendI32U
+} derive(Eq)
+pub impl Show for Instruction
+
+pub(all) struct Limits {
+  min : Int
+  max : Int?
+} derive(Eq)
+pub fn Limits::new(Int, Int?) -> Self
+pub impl Show for Limits
+
+pub(all) struct LinearMemory {
+  mut data : Array[Byte]
+  limits : Limits
+}
+pub fn LinearMemory::copy(Self, Int, Int, Int) -> Result[Unit, Trap]
+pub fn LinearMemory::fill(Self, Int, Byte, Int) -> Result[Unit, Trap]
+pub fn LinearMemory::grow(Self, Int) -> Int
+pub fn LinearMemory::new(Limits) -> Result[Self, Trap]
+pub fn LinearMemory::read_bytes(Self, Int, Int) -> Result[Array[Byte], Trap]
+pub fn LinearMemory::read_i16(Self, Int) -> Result[Int, Trap]
+pub fn LinearMemory::read_i32(Self, Int) -> Result[Int, Trap]
+pub fn LinearMemory::read_i64(Self, Int) -> Result[Int64, Trap]
+pub fn LinearMemory::read_i8(Self, Int) -> Result[Int, Trap]
+pub fn LinearMemory::read_string(Self, Int, Int) -> Result[String, Trap]
+pub fn LinearMemory::read_u16(Self, Int) -> Result[Int, Trap]
+pub fn LinearMemory::read_u8(Self, Int) -> Result[Int, Trap]
+pub fn LinearMemory::size_in_bytes(Self) -> Int
+pub fn LinearMemory::size_in_pages(Self) -> Int
+pub fn LinearMemory::write_bytes(Self, Int, Array[Byte]) -> Result[Unit, Trap]
+pub fn LinearMemory::write_i32(Self, Int, Int) -> Result[Unit, Trap]
+pub fn LinearMemory::write_i64(Self, Int, Int64) -> Result[Unit, Trap]
+pub fn LinearMemory::write_string(Self, Int, String) -> Result[Int, Trap]
+pub fn LinearMemory::write_u16(Self, Int, Int) -> Result[Unit, Trap]
+pub fn LinearMemory::write_u8(Self, Int, Int) -> Result[Unit, Trap]
+
+pub(all) enum LinkError {
+  MissingImport(String, String)
+  ImportTypeMismatch(String, String, String)
+  DuplicateExport(String)
+  StartFunctionNotFound(Int)
+  IncompatibleMemoryLimits
+  IncompatibleTableLimits
+} derive(Eq, @debug.Debug)
+pub impl Show for LinkError
+
+pub(all) struct Linker {
+  functions : Array[(String, String, HostFunction)]
+  memories : Array[(String, String, LinearMemory)]
+}
+pub fn Linker::new() -> Self
+pub fn Linker::register_func(Self, String, String, HostFunction) -> Unit
+pub fn Linker::register_memory(Self, String, String, LinearMemory) -> Unit
+pub fn Linker::resolve_func(Self, String, String) -> HostFunction?
+pub fn Linker::resolve_memory(Self, String, String) -> LinearMemory?
+
+pub(all) struct LocalDecl {
+  count : Int
+  val_type : ValueType
+} derive(Eq)
+pub fn LocalDecl::new(Int, ValueType) -> Self
+pub impl Show for LocalDecl
+
+pub(all) struct MemArg {
+  align : Int
+  offset : Int
+} derive(Eq)
+pub fn MemArg::new(Int, Int) -> Self
+pub impl Show for MemArg
+
+pub(all) struct MemorySlice {
+  offset : Int
+  length : Int
+} derive(Eq, @debug.Debug)
+pub fn MemorySlice::new(Int, Int) -> Self
+
+pub(all) struct MemoryType {
+  limits : Limits
+} derive(Eq)
+pub fn MemoryType::new(Limits) -> Self
+pub impl Show for MemoryType
+
+pub(all) struct ModuleValidator {
+  module_def : WasmModule
+}
+pub fn ModuleValidator::new(WasmModule) -> Self
+pub fn ModuleValidator::validate(Self) -> Result[Unit, DecodeError]
+
+pub(all) enum Mutability {
+  Const
+  Var
+} derive(Eq)
+pub impl Show for Mutability
+
+pub(all) struct OpenFlags {
+  read : Bool
+  write : Bool
+  create : Bool
+  truncate : Bool
+  append : Bool
+} derive(Eq)
+pub fn OpenFlags::read_only() -> Self
+pub fn OpenFlags::read_write() -> Self
+pub fn OpenFlags::write_only() -> Self
+
+pub(all) struct OperandStack {
+  values : Array[Value]
+  max_depth : Int
+}
+pub fn OperandStack::height(Self) -> Int
+pub fn OperandStack::new(Int) -> Self
+pub fn OperandStack::peek(Self) -> Result[Value, Trap]
+pub fn OperandStack::pop(Self) -> Result[Value, Trap]
+pub fn OperandStack::pop_i32(Self) -> Result[Int, Trap]
+pub fn OperandStack::pop_i64(Self) -> Result[Int64, Trap]
+pub fn OperandStack::pop_n(Self, Int) -> Result[Array[Value], Trap]
+pub fn OperandStack::push(Self, Value) -> Result[Unit, Trap]
+pub fn OperandStack::truncate(Self, Int) -> Result[Unit, Trap]
+
+pub(all) struct PluginConfig {
+  plugin_id : String
+  policy : CapabilityPolicy
+  initial_gas : Int
+  vfs : VirtualFileSystem
+}
+pub fn PluginConfig::new(String, CapabilityPolicy) -> Self
+pub fn PluginConfig::with_vfs(Self, VirtualFileSystem) -> Self
+
+pub(all) struct PluginInstance {
+  config : PluginConfig
+  wasm_module : WasmModule
+  mut instance : WasmInstance
+  sec_guard : PluginSecurityGuard
+  linker : Linker
+  fd_table : WasiFdTable
+  metrics : PluginMetrics
+}
+pub fn PluginInstance::call(Self, String, Array[Value]) -> Result[Array[Value], SecurityError]
+pub fn PluginInstance::call_extism(Self, String, Array[Byte]) -> Result[Array[Byte], SecurityError]
+pub fn PluginInstance::call_string(Self, String, String) -> Result[String, SecurityError]
+pub fn PluginInstance::get_audit_logs(Self) -> Array[AuditRecord]
+pub fn PluginInstance::get_metrics(Self) -> PluginMetrics
+pub fn PluginInstance::load(PluginConfig, Array[Byte]) -> Result[Self, SecurityError]
+pub fn PluginInstance::reset(Self) -> Result[Unit, SecurityError]
+
+pub(all) struct PluginMetrics {
+  plugin_id : String
+  mut total_calls : Int
+  mut total_gas_consumed : Int
+  mut peak_memory_pages : Int
+}
+pub fn PluginMetrics::new(String) -> Self
+
+pub(all) struct PluginSecurityGuard {
+  plugin_id : String
+  policy : CapabilityPolicy
+  audit_logs : Array[AuditRecord]
+  mut consumed_steps : Int
+}
+pub fn PluginSecurityGuard::check_fs_read(Self, String) -> Result[Unit, SecurityError]
+pub fn PluginSecurityGuard::check_fs_write(Self, String) -> Result[Unit, SecurityError]
+pub fn PluginSecurityGuard::check_network(Self, String) -> Result[Unit, SecurityError]
+pub fn PluginSecurityGuard::consume_steps(Self, Int) -> Result[Unit, SecurityError]
+pub fn PluginSecurityGuard::get_audit_logs(Self) -> Array[AuditRecord]
+pub fn PluginSecurityGuard::new(String, CapabilityPolicy) -> Self
+
+pub(all) struct ResourceQuota {
+  max_memory_pages : Int
+  max_execution_steps : Int
+} derive(Eq, @debug.Debug)
+pub fn ResourceQuota::default() -> Self
+
+pub(all) enum SecurityError {
+  PermissionDenied(String)
+  PathTraversalAttempt(String)
+  OutOfQuota(String)
+  MemoryOutOfBounds(Int, Int)
+  Aborted(String)
+} derive(Eq, @debug.Debug)
+pub impl Show for SecurityError
+
+pub(all) struct TableType {
+  limits : Limits
+} derive(Eq)
+pub fn TableType::new(Limits) -> Self
+pub impl Show for TableType
+
+pub(all) enum Trap {
+  Unreachable
+  MemoryOutOfBounds(Int, Int)
+  DivisionByZero
+  IntegerOverflow
+  InvalidConversion
+  StackOverflow
+  StackUnderflow
+  UndefinedElement(Int)
+  UninitializedElement(Int)
+  IndirectCallTypeMismatch
+  TypeMismatch(String)
+  UnknownFunction(Int)
+  UnknownGlobal(Int)
+  UnknownMemory(Int)
+  UnknownTable(Int)
+  HostError(String)
+  GasExhausted(Int, Int)
+  Abort(String)
+} derive(Eq, @debug.Debug)
+pub impl Show for Trap
+
+pub(all) enum Value {
+  I32(Int)
+  I64(Int64)
+  F32(Float)
+  F64(Double)
+} derive(Eq, @debug.Debug)
+pub fn Value::as_i32(Self) -> Result[Int, Trap]
+pub fn Value::as_i64(Self) -> Result[Int64, Trap]
+pub fn Value::get_type(Self) -> ValueType
+pub impl Show for Value
+
+pub(all) enum ValueType {
+  I32
+  I64
+  F32
+  F64
+} derive(Eq)
+pub impl Show for ValueType
+
+pub(all) struct VirtualFileSystem {
+  files : Array[InMemoryFile]
+  directories : Array[InMemoryDirectory]
+  mounts : Array[(String, String)]
+}
+pub fn VirtualFileSystem::create_file(Self, String, Array[Byte]) -> Result[InMemoryFile, SecurityError]
+pub fn VirtualFileSystem::exists(Self, String) -> Bool
+pub fn VirtualFileSystem::find_file(Self, String) -> InMemoryFile?
+pub fn VirtualFileSystem::mount(Self, String, String) -> Unit
+pub fn VirtualFileSystem::new() -> Self
+pub fn VirtualFileSystem::read_file(Self, String) -> Result[Array[Byte], SecurityError]
+pub fn VirtualFileSystem::write_file(Self, String, Array[Byte]) -> Result[Int, SecurityError]
+
+pub(all) struct WasiFd {
+  fd : Int
+  path : String
+  file : InMemoryFile
+  flags : OpenFlags
+}
+
+pub(all) struct WasiFdTable {
+  fds : Array[WasiFd]
+  mut next_fd : Int
+}
+pub fn WasiFdTable::close_fd(Self, Int) -> Result[Unit, Int]
+pub fn WasiFdTable::get_fd(Self, Int) -> WasiFd?
+pub fn WasiFdTable::get_stderr_string(Self) -> String
+pub fn WasiFdTable::get_stdout_string(Self) -> String
+pub fn WasiFdTable::new() -> Self
+pub fn WasiFdTable::open_file(Self, InMemoryFile, OpenFlags) -> Int
+pub fn WasiFdTable::read(Self, Int, Int) -> Result[Array[Byte], Int]
+pub fn WasiFdTable::seek(Self, Int, Int, Int) -> Result[Int, Int]
+pub fn WasiFdTable::write(Self, Int, Array[Byte]) -> Result[Int, Int]
+
+pub(all) struct WasmInstance {
+  functions : Array[FunctionInstance]
+  memories : Array[LinearMemory]
+  globals : Array[GlobalInstance]
+  stack : OperandStack
+  call_stack : Array[CallFrame]
+  control_stack : Array[ControlFrame]
+  host_context : HostContext
+  mut gas_limit : Int
+  mut gas_consumed : Int
+}
+pub fn WasmInstance::call_exported(Self, WasmModule, String, Array[Value]) -> Result[Array[Value], Trap]
+pub fn WasmInstance::consume_gas(Self, Int) -> Result[Unit, Trap]
+pub fn WasmInstance::get_consumed_gas(Self) -> Int
+pub fn WasmInstance::get_memory(Self, Int) -> Result[LinearMemory, Trap]
+pub fn WasmInstance::invoke(Self, Int, Array[Value]) -> Result[Array[Value], Trap]
+pub fn WasmInstance::new(Array[FunctionInstance], Array[LinearMemory], Array[GlobalInstance], HostContext, Int) -> Self
+
+pub(all) struct WasmModule {
+  types : Array[FuncType]
+  imports : Array[ImportEntry]
+  func_types : Array[Int]
+  tables : Array[TableType]
+  memories : Array[MemoryType]
+  globals : Array[GlobalEntry]
+  exports : Array[ExportEntry]
+  start_func : Int?
+  elements : Array[ElementSegment]
+  code : Array[FunctionBody]
+  data : Array[DataSegment]
+} derive(Eq)
+pub fn WasmModule::empty() -> Self
+pub fn WasmModule::find_func_export(Self, String) -> Int?
+pub fn WasmModule::get_export(Self, String) -> ExportDesc?
+pub fn WasmModule::get_func_type(Self, Int) -> Result[FuncType, Trap]
+pub fn WasmModule::get_imported_func_count(Self) -> Int
+pub fn WasmModule::instantiate(Self, Linker, HostContext, Int) -> Result[WasmInstance, Trap]
+pub impl Show for WasmModule
+
+pub(all) struct WasmParser {
+  reader : BinaryReader
+}
+pub fn WasmParser::new(Array[Byte]) -> Self
+pub fn WasmParser::parse_module(Self) -> Result[WasmModule, DecodeError]
+
+// Type aliases
+
+// Traits

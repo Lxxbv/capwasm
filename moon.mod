@@ -8,7 +8,7 @@ repository = "https://github.com/Lxxbv/capwasm"
 
 license = "Apache-2.0"
 
-keywords = ["wasm", "plugin", "sandbox", "security", "capability"]
+keywords = [ "wasm", "plugin", "sandbox", "security", "capability" ]
 
 preferred_target = "wasm"
 
