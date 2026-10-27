@@ -23,8 +23,8 @@ pub impl Show for ValueType with fn output(self, logger) {
 ///|
 /// Limits represents the min/max page limits for memories and tables.
 pub(all) struct Limits {
-  min : Int
-  max : Int?
+  min : Int32
+  max : Int32?
 } derive(Eq)
 
 ///|
@@ -36,7 +36,7 @@ pub impl Show for Limits with fn output(self, logger) {
 }
 
 ///|
-pub fn Limits::new(min : Int, max : Int?) -> Limits {
+pub fn Limits::new(min : Int32, max : Int32?) -> Limits {
   { min, max, }
 }
 
@@ -77,7 +77,7 @@ pub fn FuncType::new(
 ///|
 /// Value represents runtime instance values.
 pub(all) enum Value {
-  I32(Int)
+  I32(Int32)
   I64(Int64)
   F32(Float)
   F64(Double)
@@ -94,7 +94,7 @@ pub impl Show for Value with fn output(self, logger) {
 }
 
 ///|
-pub fn Value::as_i32(self : Value) -> Result[Int, Trap] {
+pub fn Value::as_i32(self : Value) -> Result[Int32, Trap] {
   match self {
     I32(v) => Ok(v)
     _ => Err(Trap::TypeMismatch("Expected i32 value"))
@@ -189,7 +189,7 @@ pub fn MemoryType::new(limits : Limits) -> MemoryType {
 ///|
 /// ImportDesc describes external imports into a module.
 pub(all) enum ImportDesc {
-  Func(Int)
+  Func(Int32)
   Table(TableType)
   Mem(MemoryType)
   Global(GlobalType)
@@ -232,10 +232,10 @@ pub fn ImportEntry::new(
 ///|
 /// ExportDesc describes an exported symbol type.
 pub(all) enum ExportDesc {
-  Func(Int)
-  Table(Int)
-  Mem(Int)
-  Global(Int)
+  Func(Int32)
+  Table(Int32)
+  Mem(Int32)
+  Global(Int32)
 } derive(Eq)
 
 ///|
@@ -268,7 +268,7 @@ pub fn ExportEntry::new(name : String, desc : ExportDesc) -> ExportEntry {
 ///|
 /// LocalDecl represents local variables inside a function body.
 pub(all) struct LocalDecl {
-  count : Int
+  count : Int32
   val_type : ValueType
 } derive(Eq)
 
@@ -278,6 +278,6 @@ pub impl Show for LocalDecl with fn output(self, logger) {
 }
 
 ///|
-pub fn LocalDecl::new(count : Int, val_type : ValueType) -> LocalDecl {
+pub fn LocalDecl::new(count : Int32, val_type : ValueType) -> LocalDecl {
   { count, val_type, }
 }

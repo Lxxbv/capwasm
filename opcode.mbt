@@ -4,8 +4,8 @@
 ///|
 /// MemArg represents memory access immediate arguments (alignment & offset).
 pub(all) struct MemArg {
-  align : Int
-  offset : Int
+  align : Int32
+  offset : Int32
 } derive(Eq)
 
 ///|
@@ -14,7 +14,7 @@ pub impl Show for MemArg with fn output(self, logger) {
 }
 
 ///|
-pub fn MemArg::new(align : Int, offset : Int) -> MemArg {
+pub fn MemArg::new(align : Int32, offset : Int32) -> MemArg {
   { align, offset, }
 }
 
@@ -23,7 +23,7 @@ pub fn MemArg::new(align : Int, offset : Int) -> MemArg {
 pub(all) enum BlockType {
   Empty
   Value(ValueType)
-  FuncTypeIndex(Int)
+  FuncTypeIndex(Int32)
 } derive(Eq)
 
 ///|
@@ -46,23 +46,23 @@ pub(all) enum Instruction {
   If(BlockType)
   Else
   End
-  Br(Int)
-  BrIf(Int)
-  BrTable(Array[Int], Int)
+  Br(Int32)
+  BrIf(Int32)
+  BrTable(Array[Int32], Int32)
   Return
-  Call(Int)
-  CallIndirect(Int, Int)
+  Call(Int32)
+  CallIndirect(Int32, Int32)
 
   // Parametric Instructions
   Drop
   Select
 
   // Variable Instructions
-  LocalGet(Int)
-  LocalSet(Int)
-  LocalTee(Int)
-  GlobalGet(Int)
-  GlobalSet(Int)
+  LocalGet(Int32)
+  LocalSet(Int32)
+  LocalTee(Int32)
+  GlobalGet(Int32)
+  GlobalSet(Int32)
 
   // Memory Instructions
   I32Load(MemArg)
@@ -92,7 +92,7 @@ pub(all) enum Instruction {
   MemoryGrow
 
   // Constants
-  I32Const(Int)
+  I32Const(Int32)
   I64Const(Int64)
   F32Const(Float)
   F64Const(Double)

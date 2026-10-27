@@ -48,9 +48,9 @@ pub fn GlobalEntry::new(
 ///|
 /// ElementSegment represents table initialization element segment.
 pub(all) struct ElementSegment {
-  table_index : Int
+  table_index : Int32
   offset_expr : Array[Instruction]
-  func_indices : Array[Int]
+  func_indices : Array[Int32]
 } derive(Eq)
 
 ///|
@@ -62,9 +62,9 @@ pub impl Show for ElementSegment with fn output(self, logger) {
 
 ///|
 pub fn ElementSegment::new(
-  table_index : Int,
+  table_index : Int32,
   offset_expr : Array[Instruction],
-  func_indices : Array[Int],
+  func_indices : Array[Int32],
 ) -> ElementSegment {
   { table_index, offset_expr, func_indices, }
 }
@@ -72,7 +72,7 @@ pub fn ElementSegment::new(
 ///|
 /// DataSegment represents memory initialization segment.
 pub(all) struct DataSegment {
-  mem_index : Int
+  mem_index : Int32
   offset_expr : Array[Instruction]
   data : Array[Byte]
 } derive(Eq)
@@ -86,7 +86,7 @@ pub impl Show for DataSegment with fn output(self, logger) {
 
 ///|
 pub fn DataSegment::new(
-  mem_index : Int,
+  mem_index : Int32,
   offset_expr : Array[Instruction],
   data : Array[Byte],
 ) -> DataSegment {
@@ -98,12 +98,12 @@ pub fn DataSegment::new(
 pub(all) struct WasmModule {
   types : Array[FuncType]
   imports : Array[ImportEntry]
-  func_types : Array[Int]
+  func_types : Array[Int32]
   tables : Array[TableType]
   memories : Array[MemoryType]
   globals : Array[GlobalEntry]
   exports : Array[ExportEntry]
-  start_func : Int?
+  start_func : Int32?
   elements : Array[ElementSegment]
   code : Array[FunctionBody]
   data : Array[DataSegment]
@@ -152,7 +152,7 @@ pub fn WasmModule::get_export(self : WasmModule, name : String) -> ExportDesc? {
 }
 
 ///|
-pub fn WasmModule::find_func_export(self : WasmModule, name : String) -> Int? {
+pub fn WasmModule::find_func_export(self : WasmModule, name : String) -> Int32? {
   match self.get_export(name) {
     Some(ExportDesc::Func(idx)) => Some(idx)
     _ => None
@@ -160,7 +160,7 @@ pub fn WasmModule::find_func_export(self : WasmModule, name : String) -> Int? {
 }
 
 ///|
-pub fn WasmModule::get_imported_func_count(self : WasmModule) -> Int {
+pub fn WasmModule::get_imported_func_count(self : WasmModule) -> Int32 {
   let mut count = 0
   for imp in self.imports {
     match imp.desc {
@@ -174,7 +174,7 @@ pub fn WasmModule::get_imported_func_count(self : WasmModule) -> Int {
 ///|
 pub fn WasmModule::get_func_type(
   self : WasmModule,
-  func_index : Int,
+  func_index : Int32,
 ) -> Result[FuncType, Trap] {
   let mut imported_func_idx = 0
   for imp in self.imports {

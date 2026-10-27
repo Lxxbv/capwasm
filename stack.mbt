@@ -24,17 +24,17 @@ pub impl Show for ControlBlockType with fn output(self, logger) {
 /// ControlFrame tracks block/loop/if targets for relative branching instructions.
 pub(all) struct ControlFrame {
   kind : ControlBlockType
-  stack_height : Int
-  continuation_pc : Int
-  loop_pc : Int?
+  stack_height : Int32
+  continuation_pc : Int32
+  loop_pc : Int32?
 } derive(Eq)
 
 ///|
 pub fn ControlFrame::new(
   kind : ControlBlockType,
-  stack_height : Int,
-  continuation_pc : Int,
-  loop_pc : Int?,
+  stack_height : Int32,
+  continuation_pc : Int32,
+  loop_pc : Int32?,
 ) -> ControlFrame {
   { kind, stack_height, continuation_pc, loop_pc, }
 }
@@ -42,27 +42,30 @@ pub fn ControlFrame::new(
 ///|
 /// CallFrame represents a single function invocation context.
 pub(all) struct CallFrame {
-  func_index : Int
+  func_index : Int32
   locals : Array[Value]
-  mut pc : Int
-  stack_base : Int
-  control_base : Int
+  mut pc : Int32
+  stack_base : Int32
+  control_base : Int32
   result_types : Array[ValueType]
 }
 
 ///|
 pub fn CallFrame::new(
-  func_index : Int,
+  func_index : Int32,
   locals : Array[Value],
-  stack_base : Int,
-  control_base : Int,
+  stack_base : Int32,
+  control_base : Int32,
   result_types : Array[ValueType],
 ) -> CallFrame {
   { func_index, locals, pc: 0, stack_base, control_base, result_types, }
 }
 
 ///|
-pub fn CallFrame::get_local(self : CallFrame, idx : Int) -> Result[Value, Trap] {
+pub fn CallFrame::get_local(
+  self : CallFrame,
+  idx : Int32,
+) -> Result[Value, Trap] {
   if idx < 0 || idx >= self.locals.length() {
     Err(Trap::TypeMismatch("Local variable index out of bounds: \{idx}"))
   } else {
@@ -73,7 +76,7 @@ pub fn CallFrame::get_local(self : CallFrame, idx : Int) -> Result[Value, Trap] 
 ///|
 pub fn CallFrame::set_local(
   self : CallFrame,
-  idx : Int,
+  idx : Int32,
   val : Value,
 ) -> Result[Unit, Trap] {
   if idx < 0 || idx >= self.locals.length() {
@@ -88,16 +91,16 @@ pub fn CallFrame::set_local(
 /// OperandStack provides a LIFO evaluation stack for runtime values.
 pub(all) struct OperandStack {
   values : Array[Value]
-  max_depth : Int
+  max_depth : Int32
 }
 
 ///|
-pub fn OperandStack::new(max_depth : Int) -> OperandStack {
+pub fn OperandStack::new(max_depth : Int32) -> OperandStack {
   { values: [], max_depth, }
 }
 
 ///|
-pub fn OperandStack::height(self : OperandStack) -> Int {
+pub fn OperandStack::height(self : OperandStack) -> Int32 {
   self.values.length()
 }
 
@@ -127,7 +130,7 @@ pub fn OperandStack::pop(self : OperandStack) -> Result[Value, Trap] {
 }
 
 ///|
-pub fn OperandStack::pop_i32(self : OperandStack) -> Result[Int, Trap] {
+pub fn OperandStack::pop_i32(self : OperandStack) -> Result[Int32, Trap] {
   let val = match self.pop() {
     Ok(v) => v
     Err(e) => return Err(e)
@@ -157,7 +160,7 @@ pub fn OperandStack::peek(self : OperandStack) -> Result[Value, Trap] {
 ///|
 pub fn OperandStack::truncate(
   self : OperandStack,
-  target_height : Int,
+  target_height : Int32,
 ) -> Result[Unit, Trap] {
   if target_height < 0 || target_height > self.values.length() {
     Err(Trap::StackUnderflow)
@@ -172,7 +175,7 @@ pub fn OperandStack::truncate(
 ///|
 pub fn OperandStack::pop_n(
   self : OperandStack,
-  n : Int,
+  n : Int32,
 ) -> Result[Array[Value], Trap] {
   if n < 0 || self.values.length() < n {
     return Err(Trap::StackUnderflow)

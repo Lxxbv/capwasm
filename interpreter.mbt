@@ -33,8 +33,8 @@ pub(all) struct WasmInstance {
   call_stack : Array[CallFrame]
   control_stack : Array[ControlFrame]
   host_context : HostContext
-  mut gas_limit : Int
-  mut gas_consumed : Int
+  mut gas_limit : Int32
+  mut gas_consumed : Int32
 }
 
 ///|
@@ -43,7 +43,7 @@ pub fn WasmInstance::new(
   memories : Array[LinearMemory],
   globals : Array[GlobalInstance],
   host_context : HostContext,
-  gas_limit : Int,
+  gas_limit : Int32,
 ) -> WasmInstance {
   {
     functions,
@@ -61,7 +61,7 @@ pub fn WasmInstance::new(
 ///|
 pub fn WasmInstance::get_memory(
   self : WasmInstance,
-  idx : Int,
+  idx : Int32,
 ) -> Result[LinearMemory, Trap] {
   if idx < 0 || idx >= self.memories.length() {
     Err(Trap::UnknownMemory(idx))
@@ -73,7 +73,7 @@ pub fn WasmInstance::get_memory(
 ///|
 pub fn WasmInstance::consume_gas(
   self : WasmInstance,
-  amount : Int,
+  amount : Int32,
 ) -> Result[Unit, Trap] {
   self.gas_consumed = self.gas_consumed + amount
   if self.gas_limit > 0 && self.gas_consumed > self.gas_limit {
@@ -87,7 +87,7 @@ pub fn WasmInstance::consume_gas(
 /// Invokes a function by its index in the module function table.
 pub fn WasmInstance::invoke(
   self : WasmInstance,
-  func_index : Int,
+  func_index : Int32,
   args : Array[Value],
 ) -> Result[Array[Value], Trap] {
   if func_index < 0 || func_index >= self.functions.length() {
@@ -157,7 +157,10 @@ pub fn WasmInstance::invoke(
 }
 
 ///|
-fn find_matching_end(instructions : Array[Instruction], start_pc : Int) -> Int {
+fn find_matching_end(
+  instructions : Array[Instruction],
+  start_pc : Int32,
+) -> Int32 {
   let mut depth = 1
   let mut pc = start_pc
   while pc < instructions.length() {
@@ -175,6 +178,61 @@ fn find_matching_end(instructions : Array[Instruction], start_pc : Int) -> Int {
     pc = pc + 1
   }
   instructions.length()
+}
+
+///|
+fn find_matching_else(
+  instructions : Array[Instruction],
+  start_pc : Int32,
+  end_pc : Int32,
+) -> Int32? {
+  let mut depth = 1
+  let mut pc = start_pc
+  while pc < end_pc {
+    match instructions[pc] {
+      Instruction::Block(_) | Instruction::Loop(_) | Instruction::If(_) =>
+        depth = depth + 1
+      Instruction::Else => if depth == 1 { return Some(pc) }
+      Instruction::End => depth = depth - 1
+      _ => ()
+    }
+    pc = pc + 1
+  }
+  None
+}
+
+///|
+fn WasmInstance::branch_to_depth(
+  self : WasmInstance,
+  curr_frame : CallFrame,
+  depth : Int32,
+) -> Result[Bool, Trap] {
+  let target_idx = self.control_stack.length() - 1 - depth
+  if target_idx < curr_frame.control_base {
+    return Err(Trap::Unreachable)
+  }
+  let target_frame = self.control_stack[target_idx]
+  match target_frame.loop_pc {
+    Some(loop_pc) => {
+      while self.control_stack.length() > target_idx + 1 {
+        let _ = self.control_stack.pop()
+      }
+      curr_frame.pc = loop_pc
+      Ok(false)
+    }
+    None => {
+      while self.control_stack.length() > target_idx {
+        let _ = self.control_stack.pop()
+      }
+      curr_frame.pc = target_frame.continuation_pc
+      if self.control_stack.length() == curr_frame.control_base {
+        let _ = self.call_stack.pop()
+        Ok(true)
+      } else {
+        Ok(false)
+      }
+    }
+  }
 }
 
 ///|
@@ -232,7 +290,7 @@ fn WasmInstance::execute_bytecode(
           ControlFrame::new(
             ControlBlockType::Block(bt),
             self.stack.height(),
-            end_pc,
+            end_pc + 1,
             None,
           ),
         )
@@ -244,57 +302,82 @@ fn WasmInstance::execute_bytecode(
           ControlFrame::new(
             ControlBlockType::Loop(bt),
             self.stack.height(),
-            end_pc,
+            end_pc + 1,
             Some(loop_start),
           ),
         )
       }
-      Instruction::Br(depth) => {
-        let target_idx = self.control_stack.length() - 1 - depth
-        if target_idx < curr_frame.control_base {
-          return Err(Trap::Unreachable)
+      Instruction::If(bt) => {
+        let cond = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
         }
-        let target_frame = self.control_stack[target_idx]
-        match target_frame.loop_pc {
-          Some(loop_pc) => {
-            while self.control_stack.length() > target_idx + 1 {
-              let _ = self.control_stack.pop()
+        let end_pc = find_matching_end(body.instructions, curr_frame.pc)
+        if cond != 0 {
+          self.control_stack.push(
+            ControlFrame::new(
+              ControlBlockType::If(bt),
+              self.stack.height(),
+              end_pc + 1,
+              None,
+            ),
+          )
+        } else {
+          match find_matching_else(body.instructions, curr_frame.pc, end_pc) {
+            Some(else_pc) => {
+              self.control_stack.push(
+                ControlFrame::new(
+                  ControlBlockType::If(bt),
+                  self.stack.height(),
+                  end_pc + 1,
+                  None,
+                ),
+              )
+              curr_frame.pc = else_pc + 1
             }
-            curr_frame.pc = loop_pc
-          }
-          None => {
-            while self.control_stack.length() > target_idx {
-              let _ = self.control_stack.pop()
-            }
-            curr_frame.pc = target_frame.continuation_pc
+            None => curr_frame.pc = end_pc + 1
           }
         }
       }
+      Instruction::Else => {
+        if self.control_stack.length() <= curr_frame.control_base {
+          return Err(Trap::Unreachable)
+        }
+        let top_idx = self.control_stack.length() - 1
+        let top_frame = self.control_stack[top_idx]
+        let _ = self.control_stack.pop()
+        curr_frame.pc = top_frame.continuation_pc
+      }
+      Instruction::Br(depth) =>
+        match self.branch_to_depth(curr_frame, depth) {
+          Ok(should_exit) => if should_exit { break }
+          Err(e) => return Err(e)
+        }
       Instruction::BrIf(depth) => {
         let cond = match self.stack.pop_i32() {
           Ok(v) => v
           Err(e) => return Err(e)
         }
         if cond != 0 {
-          let target_idx = self.control_stack.length() - 1 - depth
-          if target_idx < curr_frame.control_base {
-            return Err(Trap::Unreachable)
+          match self.branch_to_depth(curr_frame, depth) {
+            Ok(should_exit) => if should_exit { break }
+            Err(e) => return Err(e)
           }
-          let target_frame = self.control_stack[target_idx]
-          match target_frame.loop_pc {
-            Some(loop_pc) => {
-              while self.control_stack.length() > target_idx + 1 {
-                let _ = self.control_stack.pop()
-              }
-              curr_frame.pc = loop_pc
-            }
-            None => {
-              while self.control_stack.length() > target_idx {
-                let _ = self.control_stack.pop()
-              }
-              curr_frame.pc = target_frame.continuation_pc
-            }
-          }
+        }
+      }
+      Instruction::BrTable(targets, default_target) => {
+        let idx = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let depth = if idx >= 0 && idx < targets.length() {
+          targets[idx]
+        } else {
+          default_target
+        }
+        match self.branch_to_depth(curr_frame, depth) {
+          Ok(should_exit) => if should_exit { break }
+          Err(e) => return Err(e)
         }
       }
       Instruction::Drop => {
@@ -489,6 +572,25 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
       }
+      Instruction::I32DivU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        if b == 0 {
+          return Err(Trap::DivisionByZero)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let ub = b.to_int64() & 0xFFFF_FFFFL
+        match self.stack.push(Value::I32((ua / ub).to_int())) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
       Instruction::I32RemS => {
         let b = match self.stack.pop_i32() {
           Ok(v) => v
@@ -502,6 +604,25 @@ fn WasmInstance::execute_bytecode(
           return Err(Trap::DivisionByZero)
         }
         match self.stack.push(Value::I32(a % b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I32RemU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        if b == 0 {
+          return Err(Trap::DivisionByZero)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let ub = b.to_int64() & 0xFFFF_FFFFL
+        match self.stack.push(Value::I32((ua % ub).to_int())) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
@@ -576,6 +697,22 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
       }
+      Instruction::I32ShrU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let shift = b & 31
+        match self.stack.push(Value::I32((ua >> shift).to_int())) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
 
       // Comparisons (i32)
       Instruction::I32Eqz => {
@@ -634,6 +771,23 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
       }
+      Instruction::I32LtU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let ub = b.to_int64() & 0xFFFF_FFFFL
+        let res = if ua < ub { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
       Instruction::I32GtS => {
         let b = match self.stack.pop_i32() {
           Ok(v) => v
@@ -644,6 +798,23 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
         let res = if a > b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I32GtU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let ub = b.to_int64() & 0xFFFF_FFFFL
+        let res = if ua > ub { 1 } else { 0 }
         match self.stack.push(Value::I32(res)) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -664,6 +835,23 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
       }
+      Instruction::I32LeU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let ub = b.to_int64() & 0xFFFF_FFFFL
+        let res = if ua <= ub { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
       Instruction::I32GeS => {
         let b = match self.stack.pop_i32() {
           Ok(v) => v
@@ -675,6 +863,304 @@ fn WasmInstance::execute_bytecode(
         }
         let res = if a >= b { 1 } else { 0 }
         match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I32GeU => {
+        let b = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let ua = a.to_int64() & 0xFFFF_FFFFL
+        let ub = b.to_int64() & 0xFFFF_FFFFL
+        let res = if ua >= ub { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+
+      // Integer arithmetic & comparisons (i64)
+      Instruction::I64Add => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a + b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Sub => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a - b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Mul => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a * b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64DivS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        if b == 0L {
+          return Err(Trap::DivisionByZero)
+        }
+        match self.stack.push(Value::I64(a / b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64RemS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        if b == 0L {
+          return Err(Trap::DivisionByZero)
+        }
+        match self.stack.push(Value::I64(a % b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64And => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a & b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Or => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a | b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Xor => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a ^ b)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Shl => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a << (b.to_int() & 63))) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64ShrS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a >> (b.to_int() & 63))) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Eqz => {
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a == 0L { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Eq => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a == b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Ne => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a != b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64LtS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a < b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64GtS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a > b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64LeS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a <= b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64GeS => {
+        let b = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let res = if a >= b { 1 } else { 0 }
+        match self.stack.push(Value::I32(res)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+
+      // Type conversions
+      Instruction::I32WrapI64 => {
+        let a = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I32(a.to_int())) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64ExtendI32S => {
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a.to_int64())) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64ExtendI32U => {
+        let a = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(a.to_int64() & 0xFFFF_FFFFL)) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
@@ -691,6 +1177,42 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
         let val = match mem.read_i32(base + arg.offset) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I32(val)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I64Load(arg) => {
+        let base = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let mem = match self.get_memory(0) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let val = match mem.read_i64(base + arg.offset) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I64(val)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I32Load8S(arg) => {
+        let base = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let mem = match self.get_memory(0) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let val = match mem.read_i8(base + arg.offset) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -717,6 +1239,42 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
       }
+      Instruction::I32Load16S(arg) => {
+        let base = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let mem = match self.get_memory(0) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let val = match mem.read_i16(base + arg.offset) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I32(val)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I32Load16U(arg) => {
+        let base = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let mem = match self.get_memory(0) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let val = match mem.read_u16(base + arg.offset) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match self.stack.push(Value::I32(val)) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
       Instruction::I32Store(arg) => {
         let val = match self.stack.pop_i32() {
           Ok(v) => v
@@ -735,6 +1293,24 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
       }
+      Instruction::I64Store(arg) => {
+        let val = match self.stack.pop_i64() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let base = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let mem = match self.get_memory(0) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match mem.write_i64(base + arg.offset, val) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
       Instruction::I32Store8(arg) => {
         let val = match self.stack.pop_i32() {
           Ok(v) => v
@@ -749,6 +1325,24 @@ fn WasmInstance::execute_bytecode(
           Err(e) => return Err(e)
         }
         match mem.write_u8(base + arg.offset, val) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      Instruction::I32Store16(arg) => {
+        let val = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let base = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let mem = match self.get_memory(0) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        match mem.write_u16(base + arg.offset, val) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
@@ -772,7 +1366,16 @@ fn WasmInstance::execute_bytecode(
           Ok(v) => v
           Err(e) => return Err(e)
         }
-        let prev_pages = mem.grow(delta)
+        // Enforce CapabilityPolicy memory page ceiling during Wasm memory.grow
+        let allowed = match self.host_context.sec_guard {
+          Some(g) =>
+            match g.check_memory_grow(mem.size_in_pages() + delta) {
+              Ok(_) => true
+              Err(_) => false
+            }
+          None => true
+        }
+        let prev_pages = if allowed { mem.grow(delta) } else { -1 }
         match self.stack.push(Value::I32(prev_pages)) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -787,7 +1390,7 @@ fn WasmInstance::execute_bytecode(
 }
 
 ///|
-pub fn WasmInstance::get_consumed_gas(self : WasmInstance) -> Int {
+pub fn WasmInstance::get_consumed_gas(self : WasmInstance) -> Int32 {
   self.gas_consumed
 }
 
@@ -815,7 +1418,7 @@ pub fn WasmModule::instantiate(
   self : WasmModule,
   linker : Linker,
   host_context : HostContext,
-  gas_limit : Int,
+  gas_limit : Int32,
 ) -> Result[WasmInstance, Trap] {
   let funcs = Array::new()
   let mems = Array::new()

@@ -3,7 +3,7 @@
 
 ///|
 /// PAGE_SIZE represents the WebAssembly standard memory page size (64 KiB).
-pub let page_size : Int = 65536
+pub let page_size : Int32 = 65536
 
 ///|
 /// LinearMemory represents a sandboxed linear byte array.
@@ -20,17 +20,17 @@ pub fn LinearMemory::new(limits : Limits) -> Result[LinearMemory, Trap] {
 }
 
 ///|
-pub fn LinearMemory::size_in_pages(self : LinearMemory) -> Int {
+pub fn LinearMemory::size_in_pages(self : LinearMemory) -> Int32 {
   self.data.length() / page_size
 }
 
 ///|
-pub fn LinearMemory::size_in_bytes(self : LinearMemory) -> Int {
+pub fn LinearMemory::size_in_bytes(self : LinearMemory) -> Int32 {
   self.data.length()
 }
 
 ///|
-pub fn LinearMemory::grow(self : LinearMemory, delta_pages : Int) -> Int {
+pub fn LinearMemory::grow(self : LinearMemory, delta_pages : Int32) -> Int32 {
   if delta_pages < 0 {
     return -1
   }
@@ -61,8 +61,8 @@ pub fn LinearMemory::grow(self : LinearMemory, delta_pages : Int) -> Int {
 ///|
 fn LinearMemory::check_bounds(
   self : LinearMemory,
-  offset : Int,
-  size : Int,
+  offset : Int32,
+  size : Int32,
 ) -> Result[Unit, Trap] {
   if offset < 0 || size < 0 || offset + size > self.data.length() {
     Err(Trap::MemoryOutOfBounds(offset, size))
@@ -74,8 +74,8 @@ fn LinearMemory::check_bounds(
 ///|
 pub fn LinearMemory::read_u8(
   self : LinearMemory,
-  offset : Int,
-) -> Result[Int, Trap] {
+  offset : Int32,
+) -> Result[Int32, Trap] {
   match self.check_bounds(offset, 1) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -86,8 +86,8 @@ pub fn LinearMemory::read_u8(
 ///|
 pub fn LinearMemory::read_i8(
   self : LinearMemory,
-  offset : Int,
-) -> Result[Int, Trap] {
+  offset : Int32,
+) -> Result[Int32, Trap] {
   let u = match self.read_u8(offset) {
     Ok(v) => v
     Err(e) => return Err(e)
@@ -102,8 +102,8 @@ pub fn LinearMemory::read_i8(
 ///|
 pub fn LinearMemory::write_u8(
   self : LinearMemory,
-  offset : Int,
-  value : Int,
+  offset : Int32,
+  value : Int32,
 ) -> Result[Unit, Trap] {
   match self.check_bounds(offset, 1) {
     Ok(_) => ()
@@ -116,8 +116,8 @@ pub fn LinearMemory::write_u8(
 ///|
 pub fn LinearMemory::read_u16(
   self : LinearMemory,
-  offset : Int,
-) -> Result[Int, Trap] {
+  offset : Int32,
+) -> Result[Int32, Trap] {
   match self.check_bounds(offset, 2) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -130,8 +130,8 @@ pub fn LinearMemory::read_u16(
 ///|
 pub fn LinearMemory::read_i16(
   self : LinearMemory,
-  offset : Int,
-) -> Result[Int, Trap] {
+  offset : Int32,
+) -> Result[Int32, Trap] {
   let u = match self.read_u16(offset) {
     Ok(v) => v
     Err(e) => return Err(e)
@@ -146,8 +146,8 @@ pub fn LinearMemory::read_i16(
 ///|
 pub fn LinearMemory::write_u16(
   self : LinearMemory,
-  offset : Int,
-  value : Int,
+  offset : Int32,
+  value : Int32,
 ) -> Result[Unit, Trap] {
   match self.check_bounds(offset, 2) {
     Ok(_) => ()
@@ -161,8 +161,8 @@ pub fn LinearMemory::write_u16(
 ///|
 pub fn LinearMemory::read_i32(
   self : LinearMemory,
-  offset : Int,
-) -> Result[Int, Trap] {
+  offset : Int32,
+) -> Result[Int32, Trap] {
   match self.check_bounds(offset, 4) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -177,8 +177,8 @@ pub fn LinearMemory::read_i32(
 ///|
 pub fn LinearMemory::write_i32(
   self : LinearMemory,
-  offset : Int,
-  value : Int,
+  offset : Int32,
+  value : Int32,
 ) -> Result[Unit, Trap] {
   match self.check_bounds(offset, 4) {
     Ok(_) => ()
@@ -194,7 +194,7 @@ pub fn LinearMemory::write_i32(
 ///|
 pub fn LinearMemory::read_i64(
   self : LinearMemory,
-  offset : Int,
+  offset : Int32,
 ) -> Result[Int64, Trap] {
   match self.check_bounds(offset, 8) {
     Ok(_) => ()
@@ -211,7 +211,7 @@ pub fn LinearMemory::read_i64(
 ///|
 pub fn LinearMemory::write_i64(
   self : LinearMemory,
-  offset : Int,
+  offset : Int32,
   value : Int64,
 ) -> Result[Unit, Trap] {
   match self.check_bounds(offset, 8) {
@@ -229,8 +229,8 @@ pub fn LinearMemory::write_i64(
 ///|
 pub fn LinearMemory::read_bytes(
   self : LinearMemory,
-  offset : Int,
-  length : Int,
+  offset : Int32,
+  length : Int32,
 ) -> Result[Array[Byte], Trap] {
   match self.check_bounds(offset, length) {
     Ok(_) => ()
@@ -246,7 +246,7 @@ pub fn LinearMemory::read_bytes(
 ///|
 pub fn LinearMemory::write_bytes(
   self : LinearMemory,
-  offset : Int,
+  offset : Int32,
   bytes : Array[Byte],
 ) -> Result[Unit, Trap] {
   let len = bytes.length()
@@ -263,8 +263,8 @@ pub fn LinearMemory::write_bytes(
 ///|
 pub fn LinearMemory::read_string(
   self : LinearMemory,
-  offset : Int,
-  length : Int,
+  offset : Int32,
+  length : Int32,
 ) -> Result[String, Trap] {
   let raw = match self.read_bytes(offset, length) {
     Ok(v) => v
@@ -280,9 +280,9 @@ pub fn LinearMemory::read_string(
 ///|
 pub fn LinearMemory::write_string(
   self : LinearMemory,
-  offset : Int,
+  offset : Int32,
   str : String,
-) -> Result[Int, Trap] {
+) -> Result[Int32, Trap] {
   let len = str.length()
   match self.check_bounds(offset, len) {
     Ok(_) => ()
@@ -297,9 +297,9 @@ pub fn LinearMemory::write_string(
 ///|
 pub fn LinearMemory::fill(
   self : LinearMemory,
-  offset : Int,
+  offset : Int32,
   val : Byte,
-  count : Int,
+  count : Int32,
 ) -> Result[Unit, Trap] {
   match self.check_bounds(offset, count) {
     Ok(_) => ()
@@ -314,9 +314,9 @@ pub fn LinearMemory::fill(
 ///|
 pub fn LinearMemory::copy(
   self : LinearMemory,
-  dst_offset : Int,
-  src_offset : Int,
-  count : Int,
+  dst_offset : Int32,
+  src_offset : Int32,
+  count : Int32,
 ) -> Result[Unit, Trap] {
   match self.check_bounds(dst_offset, count) {
     Ok(_) => ()

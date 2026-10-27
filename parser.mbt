@@ -541,14 +541,17 @@ pub fn parse_expression(
   reader : BinaryReader,
 ) -> Result[Array[Instruction], DecodeError] {
   let instructions = Array::new()
-  while true {
+  let mut depth = 1
+  while depth > 0 {
     let instr = match parse_instruction(reader) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
     instructions.push(instr)
     match instr {
-      Instruction::End => break
+      Instruction::Block(_) | Instruction::Loop(_) | Instruction::If(_) =>
+        depth = depth + 1
+      Instruction::End => depth = depth - 1
       _ => ()
     }
   }
@@ -597,12 +600,12 @@ pub fn WasmParser::parse_module(
 
   let mut types : Array[FuncType] = []
   let mut imports : Array[ImportEntry] = []
-  let mut func_types : Array[Int] = []
+  let mut func_types : Array[Int32] = []
   let mut tables : Array[TableType] = []
   let mut memories : Array[MemoryType] = []
   let mut globals : Array[GlobalEntry] = []
   let mut exports : Array[ExportEntry] = []
-  let mut start_func : Int? = None
+  let mut start_func : Int32? = None
   let mut elements : Array[ElementSegment] = []
   let mut code : Array[FunctionBody] = []
   let mut data : Array[DataSegment] = []

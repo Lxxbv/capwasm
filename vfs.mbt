@@ -28,32 +28,32 @@ pub fn OpenFlags::read_write() -> OpenFlags {
 
 ///|
 /// Standard WASI errno codes.
-pub let wasi_errno_success : Int = 0
+pub let wasi_errno_success : Int32 = 0
 
 ///|
-pub let wasi_errno_access : Int = 2
+pub let wasi_errno_access : Int32 = 2
 
 ///|
-pub let wasi_errno_badf : Int = 8
+pub let wasi_errno_badf : Int32 = 8
 
 ///|
-pub let wasi_errno_inval : Int = 28
+pub let wasi_errno_inval : Int32 = 28
 
 ///|
-pub let wasi_errno_noent : Int = 44
+pub let wasi_errno_noent : Int32 = 44
 
 ///|
-pub let wasi_errno_exist : Int = 20
+pub let wasi_errno_exist : Int32 = 20
 
 ///|
-pub let wasi_errno_overflow : Int = 61
+pub let wasi_errno_overflow : Int32 = 61
 
 ///|
 /// In-memory File node within the Virtual File System.
 pub(all) struct InMemoryFile {
   path : String
   mut data : Array[Byte]
-  mut cursor : Int
+  mut cursor : Int32
   mut is_open : Bool
 }
 
@@ -66,7 +66,10 @@ pub fn InMemoryFile::new(
 }
 
 ///|
-pub fn InMemoryFile::read(self : InMemoryFile, max_bytes : Int) -> Array[Byte] {
+pub fn InMemoryFile::read(
+  self : InMemoryFile,
+  max_bytes : Int32,
+) -> Array[Byte] {
   let available = self.data.length() - self.cursor
   if available <= 0 || max_bytes <= 0 {
     return []
@@ -81,7 +84,7 @@ pub fn InMemoryFile::read(self : InMemoryFile, max_bytes : Int) -> Array[Byte] {
 }
 
 ///|
-pub fn InMemoryFile::write(self : InMemoryFile, bytes : Array[Byte]) -> Int {
+pub fn InMemoryFile::write(self : InMemoryFile, bytes : Array[Byte]) -> Int32 {
   let len = bytes.length()
   for i = 0; i < len; i = i + 1 {
     let pos = self.cursor + i
@@ -98,9 +101,9 @@ pub fn InMemoryFile::write(self : InMemoryFile, bytes : Array[Byte]) -> Int {
 ///|
 pub fn InMemoryFile::seek(
   self : InMemoryFile,
-  offset : Int,
-  whence : Int,
-) -> Result[Int, Int] {
+  offset : Int32,
+  whence : Int32,
+) -> Result[Int32, Int32] {
   // whence: 0 = SET, 1 = CUR, 2 = END
   let new_pos = match whence {
     0 => offset
@@ -275,7 +278,7 @@ pub fn VirtualFileSystem::write_file(
   self : VirtualFileSystem,
   raw_path : String,
   content : Array[Byte],
-) -> Result[Int, SecurityError] {
+) -> Result[Int32, SecurityError] {
   let path = match canonicalize_path(raw_path) {
     Ok(p) => p
     Err(e) => return Err(e)
@@ -312,7 +315,7 @@ pub fn VirtualFileSystem::exists(
 ///|
 /// WASI File Descriptor entry.
 pub(all) struct WasiFd {
-  fd : Int
+  fd : Int32
   path : String
   file : InMemoryFile
   flags : OpenFlags
@@ -322,7 +325,7 @@ pub(all) struct WasiFd {
 /// WASI File Descriptor Table managing stdio (0, 1, 2) and open virtual files.
 pub(all) struct WasiFdTable {
   fds : Array[WasiFd]
-  mut next_fd : Int
+  mut next_fd : Int32
 }
 
 ///|
@@ -353,7 +356,7 @@ pub fn WasiFdTable::new() -> WasiFdTable {
 }
 
 ///|
-pub fn WasiFdTable::get_fd(self : WasiFdTable, fd : Int) -> WasiFd? {
+pub fn WasiFdTable::get_fd(self : WasiFdTable, fd : Int32) -> WasiFd? {
   for item in self.fds {
     if item.fd == fd {
       return Some(item)
@@ -367,7 +370,7 @@ pub fn WasiFdTable::open_file(
   self : WasiFdTable,
   file : InMemoryFile,
   flags : OpenFlags,
-) -> Int {
+) -> Int32 {
   let fd = self.next_fd
   self.next_fd = self.next_fd + 1
   self.fds.push({ fd, path: file.path, file, flags, })
@@ -375,7 +378,10 @@ pub fn WasiFdTable::open_file(
 }
 
 ///|
-pub fn WasiFdTable::close_fd(self : WasiFdTable, fd : Int) -> Result[Unit, Int] {
+pub fn WasiFdTable::close_fd(
+  self : WasiFdTable,
+  fd : Int32,
+) -> Result[Unit, Int32] {
   if fd < 3 {
     return Err(wasi_errno_access) // Protected standard handles
   }
@@ -397,9 +403,9 @@ pub fn WasiFdTable::close_fd(self : WasiFdTable, fd : Int) -> Result[Unit, Int] 
 ///|
 pub fn WasiFdTable::read(
   self : WasiFdTable,
-  fd : Int,
-  max_len : Int,
-) -> Result[Array[Byte], Int] {
+  fd : Int32,
+  max_len : Int32,
+) -> Result[Array[Byte], Int32] {
   match self.get_fd(fd) {
     Some(wasi_fd) => {
       if not(wasi_fd.flags.read) {
@@ -414,9 +420,9 @@ pub fn WasiFdTable::read(
 ///|
 pub fn WasiFdTable::write(
   self : WasiFdTable,
-  fd : Int,
+  fd : Int32,
   data : Array[Byte],
-) -> Result[Int, Int] {
+) -> Result[Int32, Int32] {
   match self.get_fd(fd) {
     Some(wasi_fd) => {
       if not(wasi_fd.flags.write) {
@@ -431,10 +437,10 @@ pub fn WasiFdTable::write(
 ///|
 pub fn WasiFdTable::seek(
   self : WasiFdTable,
-  fd : Int,
-  offset : Int,
-  whence : Int,
-) -> Result[Int, Int] {
+  fd : Int32,
+  offset : Int32,
+  whence : Int32,
+) -> Result[Int32, Int32] {
   match self.get_fd(fd) {
     Some(wasi_fd) => wasi_fd.file.seek(offset, whence)
     None => Err(wasi_errno_badf)

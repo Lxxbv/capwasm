@@ -6,7 +6,7 @@
 pub(all) struct PluginConfig {
   plugin_id : String
   policy : CapabilityPolicy
-  initial_gas : Int
+  initial_gas : Int32
   vfs : VirtualFileSystem
 }
 
@@ -40,9 +40,9 @@ pub fn PluginConfig::with_vfs(
 /// Execution metrics gathered during plugin invocations.
 pub(all) struct PluginMetrics {
   plugin_id : String
-  mut total_calls : Int
-  mut total_gas_consumed : Int
-  mut peak_memory_pages : Int
+  mut total_calls : Int32
+  mut total_gas_consumed : Int32
+  mut peak_memory_pages : Int32
 }
 
 ///|
@@ -59,6 +59,7 @@ pub(all) struct PluginInstance {
   sec_guard : PluginSecurityGuard
   linker : Linker
   fd_table : WasiFdTable
+  extism_kernel : ExtismKernel
   metrics : PluginMetrics
 }
 
@@ -87,15 +88,20 @@ pub fn PluginInstance::load(
       )
   }
 
-  // 3. Setup Security Guard, Linker, and HostContext
+  // 3. Setup Security Guard, Linker, ExtismKernel, and HostContext
   let sec_guard = PluginSecurityGuard::new(config.plugin_id, config.policy)
   let linker = Linker::new()
   let fd_table = WasiFdTable::new()
+  let extism_kernel = ExtismKernel::new()
   let metrics = PluginMetrics::new(config.plugin_id)
   let host_ctx = HostContext::new(config.plugin_id)
   host_ctx.set_guard(sec_guard)
 
-  // 4. Instantiate Wasm Runtime Instance
+  // 4. Register all default & Extism host imports BEFORE instantiating the module
+  register_capwasm_host_imports(linker, sec_guard, config.vfs, fd_table)
+  register_extism_host_functions(linker, extism_kernel, sec_guard)
+
+  // 5. Instantiate Wasm Runtime Instance
   let inst = match
     parsed_mod.instantiate(linker, host_ctx, config.initial_gas) {
     Ok(i) => i
@@ -118,25 +124,26 @@ pub fn PluginInstance::load(
     sec_guard,
     linker,
     fd_table,
+    extism_kernel,
     metrics,
   }
 
-  plugin.register_default_host_imports()
   Ok(plugin)
 }
 
 ///|
-fn PluginInstance::register_default_host_imports(self : PluginInstance) -> Unit {
-  let sec_guard = self.sec_guard
-  let vfs = self.config.vfs
-  let fd_table = self.fd_table
-
+fn register_capwasm_host_imports(
+  linker : Linker,
+  sec_guard : PluginSecurityGuard,
+  vfs : VirtualFileSystem,
+  fd_table : WasiFdTable,
+) -> Unit {
   // capwasm::log(level: i32, ptr: i32, len: i32) -> void
   let log_sig = FuncType::new(
     [ValueType::I32, ValueType::I32, ValueType::I32],
     [],
   )
-  self.linker.register_func(
+  linker.register_func(
     "capwasm",
     "log",
     HostFunction::new(log_sig, fn(ctx, args) {
@@ -171,7 +178,7 @@ fn PluginInstance::register_default_host_imports(self : PluginInstance) -> Unit 
     [ValueType::I32, ValueType::I32, ValueType::I32, ValueType::I32],
     [ValueType::I32],
   )
-  self.linker.register_func(
+  linker.register_func(
     "capwasm",
     "fs_read",
     HostFunction::new(fs_read_sig, fn(ctx, args) {
@@ -235,7 +242,7 @@ fn PluginInstance::register_default_host_imports(self : PluginInstance) -> Unit 
     [ValueType::I32, ValueType::I32, ValueType::I32, ValueType::I32],
     [ValueType::I32],
   )
-  self.linker.register_func(
+  linker.register_func(
     "capwasm",
     "fs_write",
     HostFunction::new(fs_write_sig, fn(ctx, args) {
@@ -286,7 +293,7 @@ fn PluginInstance::register_default_host_imports(self : PluginInstance) -> Unit 
 
   // capwasm::net_fetch(host_ptr: i32, host_len: i32) -> i32
   let net_sig = FuncType::new([ValueType::I32, ValueType::I32], [ValueType::I32])
-  self.linker.register_func(
+  linker.register_func(
     "capwasm",
     "net_fetch",
     HostFunction::new(net_sig, fn(ctx, args) {
@@ -319,7 +326,7 @@ fn PluginInstance::register_default_host_imports(self : PluginInstance) -> Unit 
     [ValueType::I32, ValueType::I32, ValueType::I32, ValueType::I32],
     [ValueType::I32],
   )
-  self.linker.register_func(
+  linker.register_func(
     "wasi_snapshot_preview1",
     "fd_write",
     HostFunction::new(wasi_write_sig, fn(ctx, args) {
@@ -419,8 +426,11 @@ pub fn PluginInstance::call(
 }
 
 ///|
-/// Extism-style ABI: invokes an exported function by transferring an input byte buffer
-/// and receiving an output byte buffer through sandboxed linear memory.
+/// Extism Host ABI & Slice ABI dispatcher:
+/// Supports both:
+/// 1. Standard Extism Guest PDK ABI `() -> i32` where the guest interacts via `extism:host/env`
+///    (`input_length`, `input_load_u8`, `alloc`, `store_u8`, `output_set`, `error_set`, etc.).
+/// 2. Direct Linear Memory Slice ABI `(ptr: i32, len: i32) -> i32` for lightweight Wasm modules.
 pub fn PluginInstance::call_extism(
   self : PluginInstance,
   func_name : String,
@@ -434,7 +444,66 @@ pub fn PluginInstance::call_extism(
       )
   }
 
-  // Extism protocol: write input at offset 1024 (safely past stack base)
+  // Initialize Extism Kernel input channel for this invocation
+  self.extism_kernel.begin_call(input_data)
+
+  // Inspect exported function signature to determine whether it uses 0-arg Extism PDK ABI or 2-arg Slice ABI
+  let param_count = match self.wasm_module.find_func_export(func_name) {
+    Some(fidx) =>
+      match self.wasm_module.get_func_type(fidx) {
+        Ok(ft) => ft.params.length()
+        Err(_) => 0
+      }
+    None =>
+      return Err(
+        SecurityError::Aborted("Exported function not found: " + func_name),
+      )
+  }
+
+  if param_count == 0 {
+    // Standard Extism Guest PDK ABI: `func() -> i32`
+    let ret = match self.call(func_name, []) {
+      Ok(r) => r
+      Err(e) => return Err(e)
+    }
+
+    match self.extism_kernel.error_message {
+      Some(err_msg) =>
+        return Err(SecurityError::Aborted("Extism plugin error: " + err_msg))
+      None => ()
+    }
+
+    if ret.length() > 0 {
+      match ret[0] {
+        Value::I32(rc) =>
+          if rc != 0 {
+            return Err(
+              SecurityError::Aborted(
+                "Extism plugin returned non-zero status code: " + rc.to_string(),
+              ),
+            )
+          }
+        _ => ()
+      }
+    }
+
+    let out_off = self.extism_kernel.output_offset.to_int()
+    let out_len = self.extism_kernel.output_length.to_int()
+    if out_len <= 0 {
+      return Ok([])
+    }
+    match mem.read_bytes(out_off, out_len) {
+      Ok(out_bytes) => return Ok(out_bytes)
+      Err(e) =>
+        return Err(
+          SecurityError::Aborted(
+            "Failed to read Extism output buffer: " + e.to_string(),
+          ),
+        )
+    }
+  }
+
+  // Direct Slice ABI fallback: write input at offset 1024 and invoke `func(offset, length)`
   let input_offset = 1024
   let required_bytes = input_offset + input_data.length() + 1024
   if required_bytes > mem.size_in_bytes() {
@@ -450,14 +519,27 @@ pub fn PluginInstance::call_extism(
       )
   }
 
-  // Invoke target function with (offset, length)
   let args = [Value::I32(input_offset), Value::I32(input_data.length())]
   let ret = match self.call(func_name, args) {
     Ok(r) => r
     Err(e) => return Err(e)
   }
 
-  // Return value is output offset or packed offset+length
+  // If the slice function also set output via extism:host/env::output_set, prefer that
+  if self.extism_kernel.output_length > 0L {
+    let out_off = self.extism_kernel.output_offset.to_int()
+    let out_len = self.extism_kernel.output_length.to_int()
+    match mem.read_bytes(out_off, out_len) {
+      Ok(out_bytes) => return Ok(out_bytes)
+      Err(e) =>
+        return Err(
+          SecurityError::Aborted(
+            "Failed to read Extism output slice: " + e.to_string(),
+          ),
+        )
+    }
+  }
+
   if ret.length() == 0 {
     return Ok([])
   }
@@ -467,7 +549,6 @@ pub fn PluginInstance::call_extism(
       if out_off < 0 {
         return Ok([])
       }
-      // Output length stored at out_off or 2nd return value
       let out_len = if ret.length() > 1 {
         match ret[1] {
           Value::I32(l) => l
@@ -493,6 +574,43 @@ pub fn PluginInstance::call_extism(
     }
     _ => Ok([])
   }
+}
+
+///|
+/// Sets an Extism plugin configuration key-value pair accessible via `extism:host/env::config_get`.
+pub fn PluginInstance::set_extism_config(
+  self : PluginInstance,
+  key : String,
+  value : String,
+) -> Unit {
+  self.extism_kernel.set_config(key, value)
+}
+
+///|
+/// Sets a persistent Extism plugin variable accessible via `extism:host/env::var_get`.
+pub fn PluginInstance::set_extism_var(
+  self : PluginInstance,
+  key : String,
+  value : Array[Byte],
+) -> Unit {
+  self.extism_kernel.set_var(key, value)
+}
+
+///|
+/// Retrieves a persistent Extism plugin variable modified via `extism:host/env::var_set`.
+pub fn PluginInstance::get_extism_var(
+  self : PluginInstance,
+  key : String,
+) -> Array[Byte]? {
+  self.extism_kernel.get_var(key)
+}
+
+///|
+/// Returns structured log records emitted via `extism:host/env::log_*`.
+pub fn PluginInstance::get_extism_logs(
+  self : PluginInstance,
+) -> Array[(String, String)] {
+  self.extism_kernel.logs
 }
 
 ///|

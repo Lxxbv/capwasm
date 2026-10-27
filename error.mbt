@@ -5,22 +5,22 @@
 /// Trap represents an unrecoverable Wasm runtime execution trap.
 pub(all) enum Trap {
   Unreachable
-  MemoryOutOfBounds(Int, Int)
+  MemoryOutOfBounds(Int32, Int32)
   DivisionByZero
   IntegerOverflow
   InvalidConversion
   StackOverflow
   StackUnderflow
-  UndefinedElement(Int)
-  UninitializedElement(Int)
+  UndefinedElement(Int32)
+  UninitializedElement(Int32)
   IndirectCallTypeMismatch
   TypeMismatch(String)
-  UnknownFunction(Int)
-  UnknownGlobal(Int)
-  UnknownMemory(Int)
-  UnknownTable(Int)
+  UnknownFunction(Int32)
+  UnknownGlobal(Int32)
+  UnknownMemory(Int32)
+  UnknownTable(Int32)
   HostError(String)
-  GasExhausted(Int, Int)
+  GasExhausted(Int32, Int32)
   Abort(String)
 } derive(Debug, Eq)
 
@@ -62,14 +62,14 @@ pub impl Show for Trap with fn output(self, logger) {
 pub(all) enum DecodeError {
   UnexpectedEof(String)
   InvalidMagic
-  InvalidVersion(Int)
-  InvalidSectionId(Int)
-  InvalidValueType(Int)
-  InvalidMutability(Int)
-  InvalidLimits(Int)
-  InvalidOpcode(Int)
+  InvalidVersion(Int32)
+  InvalidSectionId(Int32)
+  InvalidValueType(Int32)
+  InvalidMutability(Int32)
+  InvalidLimits(Int32)
+  InvalidOpcode(Int32)
   Leb128Overflow
-  SectionSizeMismatch(Int, Int)
+  SectionSizeMismatch(Int32, Int32)
   InvalidUtf8
   MalformedModule(String)
 } derive(Debug, Eq)
@@ -108,7 +108,7 @@ pub(all) enum LinkError {
   MissingImport(String, String)
   ImportTypeMismatch(String, String, String)
   DuplicateExport(String)
-  StartFunctionNotFound(Int)
+  StartFunctionNotFound(Int32)
   IncompatibleMemoryLimits
   IncompatibleTableLimits
 } derive(Debug, Eq)

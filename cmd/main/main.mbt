@@ -137,6 +137,48 @@ fn main {
   }
 
   println("")
+
+  // Scenario 6: End-to-End Extism Host ABI (`extism:host/env`) Binary Plugin Execution
+  println(
+    "[Scenario 6] Executing Compiled Extism Binary Plugin ('extism-upper.wasm')...",
+  )
+  let extism_wasm : Array[Byte] = [
+    b'\x00', b'\x61', b'\x73', b'\x6d', b'\x01', b'\x00', b'\x00', b'\x00', b'\x01',
+    b'\x1d', b'\x06', b'\x60', b'\x00', b'\x01', b'\x7e', b'\x60', b'\x01', b'\x7e',
+    b'\x01', b'\x7e', b'\x60', b'\x01', b'\x7e', b'\x01', b'\x7f', b'\x60', b'\x02',
+    b'\x7e', b'\x7f', b'\x00', b'\x60', b'\x02', b'\x7e', b'\x7e', b'\x00', b'\x60',
+    b'\x00', b'\x01', b'\x7f', b'\x02', b'\x54', b'\x05', b'\x03', b'e', b'n', b'v',
+    b'\x0c', b'i', b'n', b'p', b'u', b't', b'_', b'l', b'e', b'n', b'g', b't', b'h',
+    b'\x00', b'\x00', b'\x03', b'e', b'n', b'v', b'\x05', b'a', b'l', b'l', b'o',
+    b'c', b'\x00', b'\x01', b'\x03', b'e', b'n', b'v', b'\x0d', b'i', b'n', b'p',
+    b'u', b't', b'_', b'l', b'o', b'a', b'd', b'_', b'u', b'8', b'\x00', b'\x02',
+    b'\x03', b'e', b'n', b'v', b'\x08', b's', b't', b'o', b'r', b'e', b'_', b'u',
+    b'8', b'\x00', b'\x03', b'\x03', b'e', b'n', b'v', b'\x0a', b'o', b'u', b't',
+    b'p', b'u', b't', b'_', b's', b'e', b't', b'\x00', b'\x04', b'\x03', b'\x02',
+    b'\x01', b'\x05', b'\x05', b'\x03', b'\x01', b'\x00', b'\x01', b'\x07', b'\x07',
+    b'\x01', b'\x03', b'r', b'u', b'n', b'\x00', b'\x05', b'\x0a', b'\x40', b'\x01',
+    b'\x3e', b'\x01', b'\x03', b'\x7e', b'\x10', b'\x00', b'\x21', b'\x00', b'\x20',
+    b'\x00', b'\x10', b'\x01', b'\x21', b'\x01', b'\x42', b'\x00', b'\x21', b'\x02',
+    b'\x02', b'\x40', b'\x03', b'\x40', b'\x20', b'\x02', b'\x20', b'\x00', b'\x59',
+    b'\x0d', b'\x01', b'\x20', b'\x01', b'\x20', b'\x02', b'\x7c', b'\x20', b'\x02',
+    b'\x10', b'\x02', b'\x41', b'\x20', b'\x6b', b'\x10', b'\x03', b'\x20', b'\x02',
+    b'\x42', b'\x01', b'\x7c', b'\x21', b'\x02', b'\x0c', b'\x00', b'\x0b', b'\x0b',
+    b'\x20', b'\x01', b'\x20', b'\x00', b'\x10', b'\x04', b'\x41', b'\x00', b'\x0b',
+  ]
+  let extism_cfg = @capwasm.PluginConfig::new("extism-upper", good_policy)
+  match @capwasm.PluginInstance::load(extism_cfg, extism_wasm) {
+    Ok(plugin) =>
+      match plugin.call_string("run", "capwasm") {
+        Ok(transformed) =>
+          println(
+            "  [PASS] Extism plugin executed via extism:host/env ABI: 'capwasm' -> '\{transformed}' (gas=\{plugin.get_metrics().total_gas_consumed})",
+          )
+        Err(e) => println("  [FAIL] Extism call failed: \{e}")
+      }
+    Err(e) => println("  [FAIL] Extism load failed: \{e}")
+  }
+
+  println("")
   println("==================================================================")
   println("  Host Security Audit Summary")
   println("==================================================================")

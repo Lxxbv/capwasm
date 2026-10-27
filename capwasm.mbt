@@ -7,7 +7,7 @@ pub(all) enum SecurityError {
   PermissionDenied(String)
   PathTraversalAttempt(String)
   OutOfQuota(String)
-  MemoryOutOfBounds(Int, Int)
+  MemoryOutOfBounds(Int32, Int32)
   Aborted(String)
 } derive(Debug, Eq)
 
@@ -36,8 +36,8 @@ pub(all) enum ActionType {
 ///|
 /// ResourceQuota defines physical resource boundaries for a sandboxed plugin.
 pub(all) struct ResourceQuota {
-  max_memory_pages : Int
-  max_execution_steps : Int
+  max_memory_pages : Int32
+  max_execution_steps : Int32
 } derive(Debug, Eq)
 
 ///|
@@ -129,6 +129,30 @@ pub fn CapabilityPolicyBuilder::set_quota(
 }
 
 ///|
+pub fn CapabilityPolicyBuilder::max_memory_pages(
+  self : CapabilityPolicyBuilder,
+  pages : Int32,
+) -> CapabilityPolicyBuilder {
+  self.quota = {
+    max_memory_pages: pages,
+    max_execution_steps: self.quota.max_execution_steps,
+  }
+  self
+}
+
+///|
+pub fn CapabilityPolicyBuilder::max_execution_steps(
+  self : CapabilityPolicyBuilder,
+  steps : Int32,
+) -> CapabilityPolicyBuilder {
+  self.quota = {
+    max_memory_pages: self.quota.max_memory_pages,
+    max_execution_steps: steps,
+  }
+  self
+}
+
+///|
 pub fn CapabilityPolicyBuilder::build(
   self : CapabilityPolicyBuilder,
 ) -> CapabilityPolicy {
@@ -184,7 +208,7 @@ pub(all) struct PluginSecurityGuard {
   plugin_id : String
   policy : CapabilityPolicy
   audit_logs : Array[AuditRecord]
-  mut consumed_steps : Int
+  mut consumed_steps : Int32
 }
 
 ///|
@@ -331,7 +355,7 @@ pub fn PluginSecurityGuard::check_network(
 ///|
 pub fn PluginSecurityGuard::consume_steps(
   self : PluginSecurityGuard,
-  steps : Int,
+  steps : Int32,
 ) -> Result[Unit, SecurityError] {
   self.consumed_steps = self.consumed_steps + steps
   if self.consumed_steps > self.policy.quota.max_execution_steps {
@@ -343,13 +367,32 @@ pub fn PluginSecurityGuard::consume_steps(
 }
 
 ///|
+pub fn PluginSecurityGuard::check_memory_grow(
+  self : PluginSecurityGuard,
+  target_pages : Int32,
+) -> Result[Unit, SecurityError] {
+  if target_pages > self.policy.quota.max_memory_pages {
+    Err(
+      SecurityError::OutOfQuota(
+        "Memory page quota exceeded: requested " +
+        target_pages.to_string() +
+        ", max allowed " +
+        self.policy.quota.max_memory_pages.to_string(),
+      ),
+    )
+  } else {
+    Ok(())
+  }
+}
+
+///|
 /// Extism-style Memory Slice Descriptor for Host-Plugin communication.
 pub(all) struct MemorySlice {
-  offset : Int
-  length : Int
+  offset : Int32
+  length : Int32
 } derive(Debug, Eq)
 
 ///|
-pub fn MemorySlice::new(offset : Int, length : Int) -> MemorySlice {
+pub fn MemorySlice::new(offset : Int32, length : Int32) -> MemorySlice {
   { offset, length, }
 }

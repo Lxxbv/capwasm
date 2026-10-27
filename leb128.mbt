@@ -5,7 +5,7 @@
 /// BinaryReader provides cursor-based byte stream reading with bounds checking.
 pub(all) struct BinaryReader {
   bytes : Array[Byte]
-  mut pos : Int
+  mut pos : Int32
 }
 
 ///|
@@ -23,7 +23,7 @@ pub fn BinaryReader::from_string(str : String) -> BinaryReader {
 }
 
 ///|
-pub fn BinaryReader::remaining(self : BinaryReader) -> Int {
+pub fn BinaryReader::remaining(self : BinaryReader) -> Int32 {
   let rem = self.bytes.length() - self.pos
   if rem < 0 {
     0
@@ -38,14 +38,14 @@ pub fn BinaryReader::has_more(self : BinaryReader) -> Bool {
 }
 
 ///|
-pub fn BinaryReader::get_position(self : BinaryReader) -> Int {
+pub fn BinaryReader::get_position(self : BinaryReader) -> Int32 {
   self.pos
 }
 
 ///|
 pub fn BinaryReader::set_position(
   self : BinaryReader,
-  new_pos : Int,
+  new_pos : Int32,
 ) -> Result[Unit, DecodeError] {
   if new_pos < 0 || new_pos > self.bytes.length() {
     Err(DecodeError::UnexpectedEof("Seek out of bounds"))
@@ -82,7 +82,7 @@ pub fn BinaryReader::peek_byte(
 ///|
 pub fn BinaryReader::read_bytes(
   self : BinaryReader,
-  count : Int,
+  count : Int32,
 ) -> Result[Array[Byte], DecodeError] {
   if count < 0 || self.pos + count > self.bytes.length() {
     return Err(DecodeError::UnexpectedEof("read_bytes(\{count})"))
@@ -97,10 +97,12 @@ pub fn BinaryReader::read_bytes(
 
 ///|
 /// Decodes unsigned 32-bit LEB128 integer.
-pub fn BinaryReader::read_u32(self : BinaryReader) -> Result[Int, DecodeError] {
-  let mut result : Int = 0
-  let mut shift : Int = 0
-  let mut count : Int = 0
+pub fn BinaryReader::read_u32(
+  self : BinaryReader,
+) -> Result[Int32, DecodeError] {
+  let mut result : Int32 = 0
+  let mut shift : Int32 = 0
+  let mut count : Int32 = 0
 
   while count < 5 {
     if self.pos >= self.bytes.length() {
@@ -124,11 +126,13 @@ pub fn BinaryReader::read_u32(self : BinaryReader) -> Result[Int, DecodeError] {
 
 ///|
 /// Decodes signed 32-bit LEB128 integer.
-pub fn BinaryReader::read_i32(self : BinaryReader) -> Result[Int, DecodeError] {
-  let mut result : Int = 0
-  let mut shift : Int = 0
-  let mut count : Int = 0
-  let mut byte_val : Int = 0
+pub fn BinaryReader::read_i32(
+  self : BinaryReader,
+) -> Result[Int32, DecodeError] {
+  let mut result : Int32 = 0
+  let mut shift : Int32 = 0
+  let mut count : Int32 = 0
+  let mut byte_val : Int32 = 0
 
   while count < 5 {
     if self.pos >= self.bytes.length() {
@@ -159,9 +163,9 @@ pub fn BinaryReader::read_i64(
   self : BinaryReader,
 ) -> Result[Int64, DecodeError] {
   let mut result : Int64 = 0L
-  let mut shift : Int = 0
-  let mut count : Int = 0
-  let mut byte_val : Int = 0
+  let mut shift : Int32 = 0
+  let mut count : Int32 = 0
+  let mut byte_val : Int32 = 0
 
   while count < 10 {
     if self.pos >= self.bytes.length() {
@@ -224,7 +228,7 @@ pub fn BinaryWriter::to_bytes(self : BinaryWriter) -> Array[Byte] {
 }
 
 ///|
-pub fn BinaryWriter::length(self : BinaryWriter) -> Int {
+pub fn BinaryWriter::length(self : BinaryWriter) -> Int32 {
   self.bytes.length()
 }
 
@@ -244,7 +248,7 @@ pub fn BinaryWriter::write_bytes(
 }
 
 ///|
-pub fn BinaryWriter::write_u32(self : BinaryWriter, value : Int) -> Unit {
+pub fn BinaryWriter::write_u32(self : BinaryWriter, value : Int32) -> Unit {
   let mut v = value
   while true {
     let byte_val = v & 0x7F
@@ -259,7 +263,7 @@ pub fn BinaryWriter::write_u32(self : BinaryWriter, value : Int) -> Unit {
 }
 
 ///|
-pub fn BinaryWriter::write_i32(self : BinaryWriter, value : Int) -> Unit {
+pub fn BinaryWriter::write_i32(self : BinaryWriter, value : Int32) -> Unit {
   let mut v = value
   let mut more = true
   while more {
