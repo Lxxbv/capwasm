@@ -313,6 +313,30 @@ pub fn VirtualFileSystem::exists(
 }
 
 ///|
+pub fn VirtualFileSystem::remove_file(
+  self : VirtualFileSystem,
+  raw_path : String,
+) -> Result[Unit, SecurityError] {
+  let path = match canonicalize_path(raw_path) {
+    Ok(p) => p
+    Err(e) => return Err(e)
+  }
+  let mut idx = -1
+  for i = 0; i < self.files.length(); i = i + 1 {
+    if self.files[i].path == path {
+      idx = i
+      break
+    }
+  }
+  if idx >= 0 {
+    let _ = self.files.remove(idx)
+    Ok(())
+  } else {
+    Err(SecurityError::PermissionDenied("File not found in VFS: " + path))
+  }
+}
+
+///|
 /// WASI File Descriptor entry.
 pub(all) struct WasiFd {
   fd : Int32

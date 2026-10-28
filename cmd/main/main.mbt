@@ -179,6 +179,45 @@ fn main {
   }
 
   println("")
+
+  // Scenario 7: Extism Manifest JSON Loading, FNV-1a Binary Fingerprint & Virtual Path Mounts
+  println(
+    "[Scenario 7] Loading Plugin via ExtismManifest JSON with FNV-1a Hash & Path Mounts...",
+  )
+  let wasm_hash = @capwasm.compute_wasm_fingerprint(extism_wasm)
+  let _ = vfs.create_file("/plugins/extism_upper.wasm", extism_wasm)
+  let manifest_json =
+    #|{
+    #|  "plugin_id": "manifest-verified-plugin",
+    #|  "wasm": [{ "path": "/plugins/extism_upper.wasm", "hash": "
+  let full_json = manifest_json +
+    wasm_hash +
+    (
+      #|"}],
+      #|  "max_pages": 8,
+      #|  "max_var_bytes": 65536,
+      #|  "allowed_hosts": ["*.moonbitlang.com", "api.github.com"],
+      #|  "allowed_paths": { "ro:/workspace/docs": "/docs", "/workspace/output": "/out" },
+      #|  "config": { "env": "production" }
+      #|}
+    )
+  match @capwasm.ExtismManifest::from_json(full_json) {
+    Ok(manifest) =>
+      match @capwasm.PluginInstance::load_from_manifest(manifest, vfs) {
+        Ok(m_plugin) =>
+          match m_plugin.call_string("run", "manifest") {
+            Ok(out_str) =>
+              println(
+                "  [PASS] Manifest-loaded plugin verified (FNV-1a=\{wasm_hash}) & executed: '\{out_str}'",
+              )
+            Err(e) => println("  [FAIL] Execution failed: \{e}")
+          }
+        Err(e) => println("  [FAIL] Manifest load failed: \{e}")
+      }
+    Err(e) => println("  [FAIL] Manifest JSON parse failed: \{e}")
+  }
+
+  println("")
   println("==================================================================")
   println("  Host Security Audit Summary")
   println("==================================================================")

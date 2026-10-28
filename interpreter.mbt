@@ -24,11 +24,26 @@ pub(all) enum FunctionInstance {
 }
 
 ///|
+/// TableInstance holds an array of nullable function indices for indirect call dispatch (`call_indirect`).
+pub(all) struct TableInstance {
+  elements : Array[Int32?]
+  limits : Limits
+}
+
+///|
+pub fn TableInstance::new(limits : Limits) -> TableInstance {
+  let elements = Array::make(limits.min, None)
+  { elements, limits, }
+}
+
+///|
 /// WasmInstance represents an instantiated, executable WebAssembly module.
 pub(all) struct WasmInstance {
   functions : Array[FunctionInstance]
   memories : Array[LinearMemory]
   globals : Array[GlobalInstance]
+  mut tables : Array[TableInstance]
+  mut types : Array[FuncType]
   stack : OperandStack
   call_stack : Array[CallFrame]
   control_stack : Array[ControlFrame]
@@ -49,6 +64,8 @@ pub fn WasmInstance::new(
     functions,
     memories,
     globals,
+    tables: [],
+    types: [],
     stack: OperandStack::new(2048),
     call_stack: [],
     control_stack: [],
@@ -497,6 +514,51 @@ fn WasmInstance::execute_bytecode(
         }
 
         let args = match self.stack.pop_n(param_count) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let results = match self.invoke(callee_idx, args) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        for r in results {
+          match self.stack.push(r) {
+            Ok(_) => ()
+            Err(e) => return Err(e)
+          }
+        }
+      }
+      Instruction::CallIndirect(type_idx, table_idx) => {
+        let elem_idx = match self.stack.pop_i32() {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        if table_idx < 0 || table_idx >= self.tables.length() {
+          return Err(Trap::UndefinedElement(elem_idx))
+        }
+        let tbl = self.tables[table_idx]
+        if elem_idx < 0 || elem_idx >= tbl.elements.length() {
+          return Err(Trap::UndefinedElement(elem_idx))
+        }
+        let callee_idx = match tbl.elements[elem_idx] {
+          Some(fidx) => fidx
+          None => return Err(Trap::UninitializedElement(elem_idx))
+        }
+        if callee_idx < 0 || callee_idx >= self.functions.length() {
+          return Err(Trap::UnknownFunction(callee_idx))
+        }
+        let callee = self.functions[callee_idx]
+        let actual_ft = match callee {
+          FunctionInstance::Defined(ft, _) => ft
+          FunctionInstance::Host(hf) => hf.func_type
+        }
+        if type_idx >= 0 && type_idx < self.types.length() {
+          let expected_ft = self.types[type_idx]
+          if actual_ft != expected_ft {
+            return Err(Trap::IndirectCallTypeMismatch)
+          }
+        }
+        let args = match self.stack.pop_n(actual_ft.params.length()) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -1494,7 +1556,32 @@ pub fn WasmModule::instantiate(
     globs.push(GlobalInstance::new(init_val, g.global_type.mutability))
   }
 
-  // 5. Initialize data segments
+  // 5. Initialize tables and element segments
+  let tbls : Array[TableInstance] = []
+  for t in self.tables {
+    tbls.push(TableInstance::new(t.limits))
+  }
+  for elem in self.elements {
+    let offset = if elem.offset_expr.length() > 0 {
+      match elem.offset_expr[0] {
+        Instruction::I32Const(v) => v
+        _ => 0
+      }
+    } else {
+      0
+    }
+    if elem.table_index >= 0 && elem.table_index < tbls.length() {
+      let target_tbl = tbls[elem.table_index]
+      for i = 0; i < elem.func_indices.length(); i = i + 1 {
+        let slot = offset + i
+        if slot >= 0 && slot < target_tbl.elements.length() {
+          target_tbl.elements[slot] = Some(elem.func_indices[i])
+        }
+      }
+    }
+  }
+
+  // 6. Initialize data segments
   for d in self.data {
     let offset = if d.offset_expr.length() > 0 {
       match d.offset_expr[0] {
@@ -1514,8 +1601,10 @@ pub fn WasmModule::instantiate(
   }
 
   let instance = WasmInstance::new(funcs, mems, globs, host_context, gas_limit)
+  instance.tables = tbls
+  instance.types = self.types
 
-  // 6. Execute start function if present
+  // 7. Execute start function if present
   match self.start_func {
     Some(sf) => {
       let _ = instance.invoke(sf, [])

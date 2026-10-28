@@ -59,6 +59,7 @@ pub(all) struct PluginInstance {
   sec_guard : PluginSecurityGuard
   linker : Linker
   fd_table : WasiFdTable
+  wasi_env : WasiEnvironment
   extism_kernel : ExtismKernel
   metrics : PluginMetrics
 }
@@ -88,17 +89,25 @@ pub fn PluginInstance::load(
       )
   }
 
-  // 3. Setup Security Guard, Linker, ExtismKernel, and HostContext
+  // 3. Setup Security Guard, Linker, WasiEnvironment, ExtismKernel, and HostContext
   let sec_guard = PluginSecurityGuard::new(config.plugin_id, config.policy)
   let linker = Linker::new()
   let fd_table = WasiFdTable::new()
+  let wasi_env = WasiEnvironment::new()
   let extism_kernel = ExtismKernel::new()
   let metrics = PluginMetrics::new(config.plugin_id)
   let host_ctx = HostContext::new(config.plugin_id)
   host_ctx.set_guard(sec_guard)
 
-  // 4. Register all default & Extism host imports BEFORE instantiating the module
-  register_capwasm_host_imports(linker, sec_guard, config.vfs, fd_table)
+  // 4. Register all default CapWasm, WASI Preview1 (19 syscalls), & Extism (19 syscalls) host imports
+  register_capwasm_host_imports(linker, sec_guard, config.vfs)
+  register_wasi_preview1_host_functions(
+    linker,
+    sec_guard,
+    config.vfs,
+    fd_table,
+    wasi_env,
+  )
   register_extism_host_functions(linker, extism_kernel, sec_guard)
 
   // 5. Instantiate Wasm Runtime Instance
@@ -124,8 +133,77 @@ pub fn PluginInstance::load(
     sec_guard,
     linker,
     fd_table,
+    wasi_env,
     extism_kernel,
     metrics,
+  }
+
+  Ok(plugin)
+}
+
+///|
+/// Loads and instantiates an Extism plugin directly from an `ExtismManifest` and a sandboxed `VirtualFileSystem`.
+/// Performs binary fingerprint verification, configures memory/variable/HTTP quotas, injects manifest configs,
+/// and mounts virtual guest-to-host directory mappings.
+pub fn PluginInstance::load_from_manifest(
+  manifest : ExtismManifest,
+  vfs : VirtualFileSystem,
+) -> Result[PluginInstance, SecurityError] {
+  if manifest.wasm_sources.length() == 0 {
+    return Err(
+      SecurityError::Aborted("ExtismManifest contains no Wasm module sources"),
+    )
+  }
+
+  // Extract primary Wasm module bytes and verify optional integrity hash
+  let (wasm_bytes, expected_hash) = match manifest.wasm_sources[0] {
+    ExtismWasmSource::InlineBytes(_, bytes, hash) => (bytes, hash)
+    ExtismWasmSource::VfsPath(_, path, hash) =>
+      match vfs.read_file(path) {
+        Ok(b) => (b, hash)
+        Err(e) =>
+          return Err(
+            SecurityError::Aborted(
+              "Failed to read Wasm module from VFS path '" +
+              path +
+              "': " +
+              e.to_string(),
+            ),
+          )
+      }
+  }
+
+  match expected_hash {
+    Some(h) =>
+      if not(verify_wasm_fingerprint(wasm_bytes, h)) {
+        return Err(
+          SecurityError::PermissionDenied(
+            "Wasm binary fingerprint mismatch: expected " +
+            h +
+            ", got " +
+            compute_wasm_fingerprint(wasm_bytes),
+          ),
+        )
+      }
+    None => ()
+  }
+
+  let policy = manifest.to_capability_policy()
+  let cfg = PluginConfig::new(manifest.plugin_id, policy).with_vfs(vfs)
+  let plugin = match PluginInstance::load(cfg, wasm_bytes) {
+    Ok(p) => p
+    Err(e) => return Err(e)
+  }
+
+  // Apply ExtismManifest memory options, config entries, and virtual directory mounts
+  plugin.extism_kernel.max_var_bytes = manifest.memory.max_var_bytes
+  plugin.extism_kernel.max_http_response_bytes = manifest.memory.max_http_response_bytes
+  for item in manifest.config {
+    let (k, v) = item
+    plugin.set_extism_config(k, v)
+  }
+  for mount in manifest.allowed_paths {
+    plugin.wasi_env.add_mount(mount)
   }
 
   Ok(plugin)
@@ -136,7 +214,6 @@ fn register_capwasm_host_imports(
   linker : Linker,
   sec_guard : PluginSecurityGuard,
   vfs : VirtualFileSystem,
-  fd_table : WasiFdTable,
 ) -> Unit {
   // capwasm::log(level: i32, ptr: i32, len: i32) -> void
   let log_sig = FuncType::new(
@@ -318,63 +395,6 @@ fn register_capwasm_host_imports(
         Ok(_) => Ok([Value::I32(200)]) // HTTP 200 OK
         Err(_) => Ok([Value::I32(403)]) // Forbidden
       }
-    }),
-  )
-
-  // wasi_snapshot_preview1::fd_write(fd: i32, iovs_ptr: i32, iovs_len: i32, nwritten_ptr: i32) -> i32
-  let wasi_write_sig = FuncType::new(
-    [ValueType::I32, ValueType::I32, ValueType::I32, ValueType::I32],
-    [ValueType::I32],
-  )
-  linker.register_func(
-    "wasi_snapshot_preview1",
-    "fd_write",
-    HostFunction::new(wasi_write_sig, fn(ctx, args) {
-      let fd = match args[0] {
-        Value::I32(v) => v
-        _ => 0
-      }
-      let iovs_ptr = match args[1] {
-        Value::I32(v) => v
-        _ => 0
-      }
-      let iovs_len = match args[2] {
-        Value::I32(v) => v
-        _ => 0
-      }
-      let nwritten_ptr = match args[3] {
-        Value::I32(v) => v
-        _ => 0
-      }
-
-      let mem = match ctx.get_memory() {
-        Ok(m) => m
-        Err(e) => return Err(e)
-      }
-
-      let mut total_written = 0
-      for i = 0; i < iovs_len; i = i + 1 {
-        let base_off = iovs_ptr + i * 8
-        let buf_ptr = match mem.read_i32(base_off) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-        let buf_len = match mem.read_i32(base_off + 4) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-        let bytes = match mem.read_bytes(buf_ptr, buf_len) {
-          Ok(b) => b
-          Err(e) => return Err(e)
-        }
-        match fd_table.write(fd, bytes) {
-          Ok(w) => total_written = total_written + w
-          Err(errno) => return Ok([Value::I32(errno)])
-        }
-      }
-
-      let _ = mem.write_i32(nwritten_ptr, total_written)
-      Ok([Value::I32(wasi_errno_success)])
     }),
   )
 }

@@ -120,6 +120,15 @@ pub fn CapabilityPolicyBuilder::allow_clock(
 }
 
 ///|
+pub fn CapabilityPolicyBuilder::allow_env_var(
+  self : CapabilityPolicyBuilder,
+  var_name : String,
+) -> CapabilityPolicyBuilder {
+  self.env_vars.push(var_name)
+  self
+}
+
+///|
 pub fn CapabilityPolicyBuilder::set_quota(
   self : CapabilityPolicyBuilder,
   quota : ResourceQuota,
@@ -319,13 +328,36 @@ pub fn PluginSecurityGuard::check_fs_write(
 }
 
 ///|
+/// Matches an Extism allowed_hosts pattern (supports `*` and `*.domain.com` wildcards) against a target hostname.
+pub fn match_host_wildcard(pattern : String, host : String) -> Bool {
+  if pattern == "*" || pattern == host {
+    return true
+  }
+  // Support leading wildcard: "*.example.com" matches "api.example.com" and "sub.api.example.com"
+  if pattern.length() > 2 && pattern[0] == '*' && pattern[1] == '.' {
+    let suffix_len = pattern.length() - 1 // ".example.com"
+    if host.length() <= suffix_len {
+      return false
+    }
+    let offset = host.length() - suffix_len
+    for i = 0; i < suffix_len; i = i + 1 {
+      if host[offset + i] != pattern[1 + i] {
+        return false
+      }
+    }
+    return true
+  }
+  false
+}
+
+///|
 pub fn PluginSecurityGuard::check_network(
   self : PluginSecurityGuard,
   host : String,
 ) -> Result[Unit, SecurityError] {
   let mut matched = false
   for allowed in self.policy.allowed_network_hosts {
-    if host == allowed {
+    if match_host_wildcard(allowed, host) {
       matched = true
       break
     }
@@ -337,7 +369,7 @@ pub fn PluginSecurityGuard::check_network(
       action: ActionType::NetConnect,
       target: host,
       allowed: true,
-      reason: "Host in network allowlist",
+      reason: "Host matched network allowlist",
     })
     Ok(())
   } else {
@@ -349,6 +381,68 @@ pub fn PluginSecurityGuard::check_network(
       reason: "Host not in network allowlist",
     })
     Err(SecurityError::PermissionDenied("Network forbidden: " + host))
+  }
+}
+
+///|
+pub fn PluginSecurityGuard::check_clock(
+  self : PluginSecurityGuard,
+) -> Result[Unit, SecurityError] {
+  if self.policy.allow_clock {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::ClockRead,
+      target: "system_clock",
+      allowed: true,
+      reason: "Clock access permitted by policy",
+    })
+    Ok(())
+  } else {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::ClockRead,
+      target: "system_clock",
+      allowed: false,
+      reason: "Clock access disabled by policy",
+    })
+    Err(SecurityError::PermissionDenied("Clock read forbidden by policy"))
+  }
+}
+
+///|
+pub fn PluginSecurityGuard::check_env(
+  self : PluginSecurityGuard,
+  var_name : String,
+) -> Result[Unit, SecurityError] {
+  let mut matched = false
+  for allowed in self.policy.allowed_env_vars {
+    if allowed == "*" || allowed == var_name {
+      matched = true
+      break
+    }
+  }
+  if matched {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::EnvRead,
+      target: var_name,
+      allowed: true,
+      reason: "Environment variable in allowlist",
+    })
+    Ok(())
+  } else {
+    self.audit_logs.push({
+      plugin_id: self.plugin_id,
+      action: ActionType::EnvRead,
+      target: var_name,
+      allowed: false,
+      reason: "Environment variable not in allowlist",
+    })
+    Err(
+      SecurityError::PermissionDenied(
+        "Environment variable forbidden: " + var_name,
+      ),
+    )
   }
 }
 

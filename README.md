@@ -1,173 +1,126 @@
 # CapWasm 🛡️
 
-**Capability-Based WebAssembly Plugin Sandbox & Extism Host Kernel in Pure MoonBit**  
-*(基于能力安全与 Extism 协议兼容的纯 MoonBit WebAssembly 插件沙箱运行时)*
+**基于能力安全与 Extism/WASI 双协议栈兼容的纯 MoonBit WebAssembly 插件沙箱运行时**  
+*(Capability-Based WebAssembly Plugin Sandbox & Extism/WASI Host Kernel in Pure MoonBit)*
 
 [![MoonBit](https://img.shields.io/badge/Language-MoonBit-purple)](https://www.moonbitlang.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Code Size](https://img.shields.io/badge/MoonBit%20LOC-8%2C041%20Lines-success)]()
-[![Tests](https://img.shields.io/badge/Tests-47%20Passed-brightgreen)]()
+[![Code Size](https://img.shields.io/badge/Pure%20MoonBit%20LOC-10%2C643%20Lines-success)]()
+[![Tests](https://img.shields.io/badge/Tests-50%20Passed%20(100%25)-brightgreen)]()
 
 ---
 
-## 📖 Overview (项目简介)
+## 📖 项目简介与核心定位 (Overview & Positioning)
 
-**CapWasm** (`Lxxbv/capwasm`) is a zero-dependency, pure-MoonBit **Capability-Based WebAssembly Plugin Sandbox and Extism-Compatible Host Runtime**. It is designed for MoonBit host applications that need to safely load and execute untrusted third-party `.wasm` plugins (such as AI Agent MCP tool plugins, Markdown/template processors, and multi-tenant serverless user scripts).
+**CapWasm** (`Lxxbv/capwasm`) 是一个 100% 纯 MoonBit 编写、零外部 C/Rust FFI 依赖的 **能力安全（Capability-based Security）WebAssembly 插件沙箱与 Extism/WASI 宿主内核**。
 
-Unlike bare-metal WebAssembly specification interpreters that only focus on instruction execution, **CapWasm** embeds fine-grained **Object-Capability security guards**, **instruction-level Gas metering**, **memory page quota enforcement**, a **path-traversal-proof in-memory Virtual File System (VFS)**, and a complete **Extism Host Kernel (`extism:host/env`)** directly into a self-contained Wasm 1.0 runtime.
+它并非单纯用于执行数值指令的底层 Wasm 规范参考解释器，而是定位于 **“MoonBit 原生宿主应用的安全插件接入底座”**，专为 **AI Agent (MCP) 工具插件、多租户 Serverless 规则脚本、Markdown/文档渲染扩展** 等需要动态加载不可信第三方 `.wasm` 插件的场景设计：
+1. **默认零信任与防越权逃逸**：通过能力策略（`CapabilityPolicy`）与虚拟目录挂载（`ExtismPathMount`），拦截 `../` 路径穿越、未授权文件读写、未授权环境变量读取与非法外联域名请求；
+2. **多维资源配额熔断（防 DoS）**：同时对 **单步指令 Gas 消耗**、**`memory.grow` 线性内存扩页**、**Extism 持久化变量容量 (`max_var_bytes`)** 与 **HTTP 响应体积 (`max_http_response_bytes`)** 实施硬上限拦截；
+3. **真实 Extism + WASI Preview1 插件无缝接入**：原生实现 **`ExtismManifest` JSON 解析与 FNV-1a 指纹校验**、**19 个 `extism:host/env` 宿主函数** 与 **19 个 `wasi_snapshot_preview1` 系统调用**，使标准 `wasm32-wasi` 编译的 Extism 插件无需任何外部 FFI 即可在纯 MoonBit 宿主中安全运行。
 
 ---
 
-## 🎯 Positioning & Ecosystem Comparison (项目定位与对标生态库对比)
+## 🎯 与对标的类似生态库定位及功能对比 (Ecosystem Comparison)
 
-To clarify how **CapWasm** differs from existing WebAssembly and sandbox libraries in the MoonBit ecosystem and the broader Wasm industry, the table below compares their positioning and feature sets:
+下表将 **CapWasm** 与 MoonBit 社区现有的 Wasm/沙箱类项目（`moonbitlang/wasm5`、`mizchi/wasmx`、`tuya-me/aegisrun`、`mizchi/wacon`）以及业界主流插件框架 `Extism (Rust/C SDK)` 进行定位与功能对比：
 
-| Dimension | `moonbitlang/wasm5` | `mizchi/wasmx` | `tuya-me/aegisrun` | `mizchi/wacon` | `Extism (Rust/C SDK)` | **CapWasm (This Project)** |
+| 对比维度 | `moonbitlang/wasm5` | `mizchi/wasmx` | `tuya-me/aegisrun` | `mizchi/wacon` | `Extism (Rust/C SDK)` | **CapWasm (本项目)** |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Primary Positioning** | Wasm 1.0 Spec Reference Interpreter | General-purpose Wasm VM & CLI | AI Agent / MCP Tool Runner | RISC-V Container Emulator | Cross-language Wasm Plugin SDK | **Capability-Secured Wasm Plugin Sandbox & Extism Host Kernel** |
-| **Implementation & Dependencies** | Pure MoonBit | MoonBit | MoonBit | MoonBit | Rust (`wasmtime`) + C Shared Library FFI | **100% Pure MoonBit (Zero external C/Rust FFI)** |
-| **Wasm 1.0 Binary Parser & Validator** | Yes | Yes | Partial / External | RISC-V ELF | Via Wasmtime | **Yes (Full LEB128, 11 Sections, Structural Validator)** |
-| **Instruction-Level Gas Metering** | No | Basic | Timeout-based | Cycle limit | Via Wasmtime Fuel | **Embedded Per-Instruction Gas Accounting & `GasExhausted` Trap** |
-| **Memory Growth Quota (`memory.grow` Guard)** | Module Limits only | Module Limits only | Partial | Page Table | Host Limits | **Dual Enforcement on Wasm `memory.grow` & Extism `alloc`** |
-| **Fine-Grained Capability Policy** | None | None | Agent-oriented | None | Basic Config (No Path Traversal Audit) | **Deny-by-Default Path Prefix Allowlist, `../` Detection, Domain Allowlist** |
-| **Sandboxed In-Memory VFS & WASI FD Table** | None | Basic WASI Pass-through | Scoped Directory | Container Rootfs | Wasmtime WASI Dir Mapping | **Isolated In-Memory VFS + POSIX Normalization + Protected `stdin/out/err`** |
-| **Extism Host ABI (`extism:host/env`)** | No | No | No | No | Official Reference | **Full `extism:host/env` (19 Host Functions + Kernel Block Allocator)** |
-| **Plugin `Config` & Persistent `Var` Store** | None | None | None | None | Yes | **Native Support (`config_get` / `var_get` / `var_set`)** |
-| **Structured Security Audit Ledger** | None | None | Basic Logs | None | Standard Logs | **Immutable Per-Action `AuditRecord` (`ALLOWED` / `DENIED` + Reason)** |
+| **核心定位** | Wasm 1.0 规范教学/参考解释器 | 通用 Wasm 虚拟机与 CLI 运行器 | AI Agent / MCP 工具安全执行器 | RISC-V 容器模拟器环境 | 跨语言通用 Wasm 插件宿主 SDK | **MoonBit 原生能力安全插件沙箱 + Extism/WASI 宿主内核** |
+| **实现方式与外部依赖** | 纯 MoonBit | MoonBit | MoonBit | MoonBit | 依赖 Rust `wasmtime` + C `libextism` FFI | **100% 纯 MoonBit 自包含（零 C/Rust FFI 外部依赖）** |
+| **Wasm 二进制解析、校验与编译** | 仅解析执行 | 仅解析执行 | 依赖外部或简化 | 面向 RISC-V ELF | 依赖 Wasmtime | **支持完整 11 节二进制解码 + 静态校验 + `pdk.mbt` 二进制编码器** |
+| **指令级 Gas 计费与死循环熔断** | 不支持 | 基础限制 | 侧重调用超时控制 | 模拟器周期限制 | 依赖 Wasmtime Fuel | **分派环路内嵌单步 Gas 扣减 + `Trap::GasExhausted` 强熔断** |
+| **多维内存与状态配额门控** | 仅模块自身 Limits | 仅模块自身 Limits | 部分支持 | 页表限制 | 宿主 `max_pages` / `max_var_bytes` | **四重门控：`memory.grow` 页上限、Extism `alloc`、`max_var_bytes`、`max_http_response_bytes`** |
+| **细粒度能力安全策略 (`CapabilityPolicy`)** | 无 | 无 | 面向 Agent 工具 | 无 | 基础配置（无内置路径穿越审计账本） | **默认全拒绝白名单、`../` 路径穿越拦截、`*.domain` 通配符域名白名单、环境变量白名单** |
+| **沙箱内存 VFS 与虚拟目录挂载** | 无 | 基础 WASI 透传 | 受限目录访问 | 容器镜像 Rootfs | 依赖 Wasmtime WASI Dir Mapping | **纯内存 `VirtualFileSystem` + `ExtismPathMount` (`ro:` 只读挂载映射) + 标准句柄防关闭** |
+| **`wasi_snapshot_preview1` 覆盖度** | 无 | 基础 I/O | 部分 | 无（RISC-V syscall） | 依赖 Wasmtime WASI | **完整实现 19 个核心 WASI preview1 系统调用（含 `path_open`/`fd_read`/`clock`/`random`）** |
+| **Extism 协议 (`extism:host/env` + Manifest)** | 不支持 | 不支持 | 不支持 | 不支持 | 官方参考实现 | **完整实现 `ExtismManifest` JSON 解析、FNV-1a 指纹校验与 19 个 `extism:host/env` 宿主函数** |
+| **结构化安全审计账本 (`AuditRecord`)** | 无 | 无 | 基础日志 | 无 | 普通运行日志 | **每次文件/网络/时钟/环境变量鉴权均生成不可篡改的 `ALLOWED`/`DENIED` 审计记录** |
 
 ---
 
-## 🏗️ Architecture & Substantive Contributions (架构分层与核心实质贡献)
+## 🏗️ 现有底座之外的实质贡献详解 (Substantive Contributions Beyond Base VM)
 
-CapWasm comprises **8,041 lines of pure MoonBit source code** (8,806 lines including generated `.mbti` interfaces) organized into two distinct architectural layers:
+CapWasm 共包含 **10,643 行纯 MoonBit 源码**（含 `.mbti` 接口文件共 **11,495 行**）。其中，底层受控 Wasm 1.0 执行底座为 **4,415 行**，而 **构建在底座之上的沙箱安全、WASI 虚拟化与 Extism 插件内核实质贡献代码达 4,540 行（另有 1,688 行测试与演示代码）**：
 
 ```
-+-----------------------------------------------------------------------------------+
-|                        Host Application (MoonBit)                                 |
-|   CapabilityPolicyBuilder  |  PluginInstance::load  |  call_extism / call_string  |
-+-----------------------------------------------------------------------------------+
-                                        |
-                                        v
-+===================================================================================+
-| LAYER 2: CapWasm Substantive Security & Plugin Kernel Contributions (2,444 LOC)   |
-|                                                                                   |
-|  +------------------------------------+  +-------------------------------------+  |
-|  | Capability Security Guard          |  | Extism Host Kernel (extism.mbt)     |  |
-|  | (capwasm.mbt)                      |  | - ExtismMemBlock Arena Allocator    |  |
-|  | - Deny-by-default allowlists       |  | - 19 `extism:host/env` Host Imports |  |
-|  | - `../` Path Traversal Blocker     |  | - Input/Output/Error Channels       |  |
-|  | - Outbound Domain Allowlist        |  | - Plugin `Config` & Persistent `Var`|  |
-|  | - Structured AuditRecord Ledger    |  | - Capability-Gated `http_request`   |  |
-|  +------------------------------------+  +-------------------------------------+  |
-|  +------------------------------------+  +-------------------------------------+  |
-|  | In-Memory VFS & WASI Isolation     |  | Plugin Lifecycle & Dual ABI Bridge  |  |
-|  | (vfs.mbt)                          |  | (plugin.mbt & host.mbt)             |  |
-|  | - Zero Host-Disk Exposure          |  | - Pre-instantiation Symbol Linking  |  |
-|  | - POSIX Path Canonicalization      |  | - 0-arg Extism PDK ABI `() -> i32`  |  |
-|  | - Protected WASI FD Table (0,1,2)  |  | - 2-arg Slice ABI `(i32,i32) -> i32`|  |
-|  +------------------------------------+  +-------------------------------------+  |
-+===================================================================================+
-                                        |
-                                        v
-+===================================================================================+
-| LAYER 1: Self-Contained Hooked Wasm 1.0 Execution Engine (4,326 LOC)              |
-|  - Binary Decoder & LEB128 Reader (`parser.mbt`, `leb128.mbt`, `validator.mbt`)   |
-|  - Hooked Stack Bytecode Interpreter (`interpreter.mbt`, `stack.mbt`, `opcode.mbt`)|
-|    * Per-instruction Gas consumption hook (`consume_gas` -> `Trap::GasExhausted`) |
-|    * Security-guarded `Instruction::MemoryGrow` (`sec_guard.check_memory_grow`)   |
-|  - 64 KiB Paged Linear Memory with Bounds Checking (`memory.mbt`)                 |
-+===================================================================================+
++---------------------------------------------------------------------------------------+
+|                            MoonBit Host Application                                   |
+|  ExtismManifest::from_json  |  PluginInstance::load_from_manifest  |  call_string     |
++---------------------------------------------------------------------------------------+
+                                           |
+                                           v
++=======================================================================================+
+| LAYER 2: 现有底座之外的核心实质贡献 — 沙箱安全、WASI 与 Extism 插件内核 (4,540 行)      |
+|                                                                                       |
+|  +---------------------------------------+  +--------------------------------------+  |
+|  | 1. Extism Manifest 与挂载引擎          |  | 2. Extism 宿主内核 (extism.mbt, 881行)|  |
+|  |    (manifest.mbt, 562 行)             |  | - ExtismMemBlock Arena 内存块分配器  |  |
+|  | - ExtismManifest JSON 解析器          |  | - 19 个 `extism:host/env` 宿主函数   |  |
+|  | - 64-bit FNV-1a 二进制完整性指纹校验   |  | - Config 与 `max_var_bytes` 状态存储 |  |
+|  | - `ro:` 只读虚拟目录挂载映射           |  | - 域名白名单门控 `http_request`      |  |
+|  +---------------------------------------+  +--------------------------------------+  |
+|  +---------------------------------------+  +--------------------------------------+  |
+|  | 3. WASI Preview1 系统调用层           |  | 4. 内存 VFS、能力守卫与 PDK 编译器    |  |
+|  |    (wasi.mbt, 790 行)                 |  |    (vfs/capwasm/pdk/plugin, 2,307行) |  |
+|  | - 19 个 `wasi_snapshot_preview1` 函数 |  | - 纯内存 VFS + POSIX 路径规范化      |  |
+|  | - `path_open`/`fd_read`/`fd_write`    |  | - `../` 路径穿越拦截 + `*.domain` 匹配|  |
+|  | - 受控虚拟时钟 `clock_time_get` & PRNG |  | - `WasmModule::encode_to_bytes` 编译器|  |
+|  +---------------------------------------+  +--------------------------------------+  |
++=======================================================================================+
+                                           |
+                                           v
++=======================================================================================+
+| LAYER 1: 内嵌安全钩子的受控 Wasm 1.0 执行底座 (4,415 行)                               |
+|  - 指令分派环路内嵌单步 Gas 扣减 (`consume_gas` -> `Trap::GasExhausted`)               |
+|  - `Instruction::MemoryGrow` 联动 `sec_guard.check_memory_grow` 硬上限拦截            |
+|  - `TableInstance` + `Instruction::CallIndirect` 动态函数表与运行时 `FuncType` 签名校验|
+|  - 完整 `i32`/`i64` 算术/访存指令集、结构化 `block`/`loop`/`if`/`else`/`br_table`      |
++=======================================================================================+
 ```
 
-### Why a Self-Contained Wasm Execution Engine?
-External Wasm interpreters execute guest code as a black box, making it difficult to intercept individual instructions or memory growth requests without invasive forks. CapWasm's Layer 1 engine embeds security hooks directly into:
-1. **The bytecode dispatch loop (`interpreter.mbt`)**: Every Wasm instruction and host call deducts Gas against `CapabilityPolicy.quota.max_execution_steps`, immediately trapping runaway loops (`Trap::GasExhausted`).
-2. **The `memory.grow` instruction (`interpreter.mbt`)**: Before growing linear memory, the VM consults `host_context.sec_guard.check_memory_grow(target_pages)`, enforcing hard host memory ceilings even if the guest `.wasm` module declares a higher maximum in its binary header.
+---
+
+## 🔌 Extism 兼容机制与真实插件接入证明 (`extism:host/env` + `wasi_snapshot_preview1`)
+
+CapWasm 通过四阶段全链路机制接入标准 Extism 插件：
+1. **Manifest 解析与二进制哈希校验 ([`manifest.mbt`](manifest.mbt))**：通过 `ExtismManifest::from_json` 解析插件配置、内存/变量配额、域名白名单与虚拟挂载表（如 `"ro:/host/tenant_a/docs": "/docs"`），并在加载前校验 `.wasm` 镜像的 64 位 FNV-1a 指纹。
+2. **42 个宿主导入符号全量预链接 ([`plugin.mbt`](plugin.mbt))**：实例化前自动向 `Linker` 注册 **19 个 `extism:host/env`（含 `env` 别名）函数**、**19 个 `wasi_snapshot_preview1` 系统调用** 与 **4 个 `capwasm` 原生函数**。
+3. **Arena 内存块分配与双 ABI 自动调度 ([`extism.mbt`](extism.mbt))**：`ExtismKernel` 在插件线性内存偏移 `8192` 处维护 8 字节对齐的 Arena 分配器（支持 `free` 块复用与受控扩页），并通过 `output_set(offset, len)` 回收插件输出，同时兼容零参 `() -> i32` 与切片 `(i32, i32) -> i32` 两种 ABI。
+4. **WASI 虚拟挂载与能力门控协同 ([`wasi.mbt`](wasi.mbt))**：插件内调用 WASI `path_open("/docs/hello.txt")` 时，自动经由 `resolve_mounted_path` 映射至宿主 VFS 的 `/host/tenant_a/docs/hello.txt`，并通过 `PluginSecurityGuard` 记录结构化审计日志 `AuditRecord`。
 
 ---
 
-## 🔌 Extism Compatibility Mechanism (`extism:host/env`)
+## 🚀 快速开始与一键验证 (Quick Start)
 
-CapWasm implements the complete **Extism Host ABI (`extism:host/env` and alias `env`)** in [`extism.mbt`](extism.mbt) and [`plugin.mbt`](plugin.mbt), enabling standard Extism guest plugins (`() -> i32`) to run in pure MoonBit:
+### 1. 运行全部 50 项单元与端到端集成测试
+```bash
+moon test
+```
+```text
+Total tests: 50, passed: 50, failed: 0.
+```
 
-1. **Kernel Memory Block Allocator (`ExtismKernel::alloc` / `free` / `length` / `length_unsafe`)**:
-   - Manages guest heap allocations starting at offset `8192` (`8 KiB`) using an 8-byte aligned bump allocator and a block descriptor table (`Array[ExtismMemBlock]`).
-   - Automatically reuses freed blocks (`active == false`) of sufficient capacity and grows linear memory pages on demand while enforcing `PluginSecurityGuard::check_memory_grow`.
-2. **Host-Guest I/O Marshaling (`input_length`, `input_load_u8`, `input_load_u64`, `load_u8`, `load_u64`, `store_u8`, `store_u64`, `output_set`, `error_set`)**:
-   - When the host invokes `plugin.call_extism("run", input_bytes)` or `plugin.call_string("run", "capwasm")`, the kernel loads `input_bytes` into the input channel, invokes the exported 0-argument Wasm function, and reads back the resulting slice recorded by `output_set(offset, length)`.
-3. **Per-Plugin Config & Persistent Variable Store (`config_get`, `var_get`, `var_set`)**:
-   - Allows the host to inject configuration parameters (`plugin.set_extism_config(k, v)`) and stateful variables (`plugin.set_extism_var(k, bytes)`), which the guest reads and mutates via kernel memory handles.
-4. **Capability-Gated Extism HTTP & Logging (`http_request`, `http_status_code`, `log_info`, `log_debug`, `log_warn`, `log_error`)**:
-   - When a plugin calls `extism:host/env::http_request(req_off, body_off)`, CapWasm parses the target hostname from the request block and validates it against `sec_guard.check_network(host)`:
-     - **Whitelisted Host**: Sets `http_status_code = 200`, allocates a response block in linear memory, and returns its `i64` handle.
-     - **Unauthorized Host**: Sets `http_status_code = 403`, records a `DENIED` `AuditRecord` in the security ledger, and returns `0L`.
-
----
-
-## 🚀 Quick Start (快速开始)
-
-### 1. Run the Interactive Sandbox & Extism Plugin Demo
+### 2. 运行 7 大场景交互式沙箱与 Extism Manifest 演示程序
 ```bash
 moon run cmd/main
 ```
-
-**Expected Output:**
 ```text
 ==================================================================
   CapWasm: Capability-Based WebAssembly Plugin Sandbox Host      
   MoonBit Hackathon 2026 - Production System Demonstration        
 ==================================================================
-
-[Scenario 1] Running Benign Plugin ('doc-renderer.wasm')...
-  -> Plugin requests FS read on '/workspace/docs/guide.md'
-  [PASS] Read permitted (bytes=20).
-  -> Plugin requests FS write on '/workspace/output/result.html'
-  [PASS] Write permitted under capability allowlist.
-
-[Scenario 2] Running Malicious Plugin ('untrusted-agent.wasm')...
-  -> Plugin attempts path traversal: '/workspace/docs/../../etc/shadow'
-  [SECURITY BLOCKED] PathTraversalAttempt: /workspace/docs/../../etc/shadow
-
-[Scenario 3] Running Network Escape Attempt...
-  -> Plugin attempts unauthorized outbound connection: 'evil-c2.darknet'
-  [SECURITY BLOCKED] PermissionDenied: Network forbidden: evil-c2.darknet
-  -> Plugin attempts authorized outbound connection: 'api.github.com' (denied: not in evil policy)
-  [SECURITY BLOCKED] PermissionDenied: Network forbidden: api.github.com
-
-[Scenario 4] Running Runaway/Infinite Loop Plugin ('crypto-miner.wasm')...
-  -> Plugin executing instruction burst (60,000 steps)...
-  -> Plugin attempting runaway execution (+50,000 steps)...
-  [RESOURCE QUOTA EXCEEDED] OutOfQuota: Instruction limit exceeded
-
-[Scenario 5] Testing Sandboxed WASI Standard Handle Isolation...
-  -> Captured guest stdout: '[Plugin Output] Hello Sandbox'
-  -> Verifying guest cannot close standard stdout handle (fd 1)...
-  [PASS] Standard handle protected against guest closure (errno=2).
-
+...
 [Scenario 6] Executing Compiled Extism Binary Plugin ('extism-upper.wasm')...
   [PASS] Extism plugin executed via extism:host/env ABI: 'capwasm' -> 'CAPWASM' (gas=307)
 
-==================================================================
-  Host Security Audit Summary
-==================================================================
-  - [untrusted-agent] target=/workspace/docs/../../etc/shadow status=DENIED reason=Path traversal attempt detected
-  - [untrusted-agent] target=evil-c2.darknet status=DENIED reason=Host not in network allowlist
-  - [untrusted-agent] target=api.github.com status=DENIED reason=Host not in network allowlist
-==================================================================
-  Demonstration finished successfully. All security bounds held.
-==================================================================
-```
-
-### 2. Run the Full Test Suite (47 Tests)
-```bash
-moon test
-```
-```text
-Total tests: 47, passed: 47, failed: 0.
+[Scenario 7] Loading Plugin via ExtismManifest JSON with FNV-1a Hash & Path Mounts...
+  [PASS] Manifest-loaded plugin verified (FNV-1a=a16a6ff014273bbf) & executed: 'MANIFEST'
 ```
 
 ---
 
-## 📄 License
+## 📄 开源协议 (License)
 
-Licensed under the [Apache-2.0 License](LICENSE).
+本项目基于 [Apache-2.0 License](LICENSE) 开源。详细项目申报书请参阅 [`项目申报书.md`](项目申报书.md) 或 [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md)。

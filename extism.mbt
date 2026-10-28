@@ -18,6 +18,22 @@ pub impl Show for ExtismMemBlock with fn output(self, logger) {
 }
 
 ///|
+/// ExtismHttpRequest encapsulates an outbound HTTP request initiated by a guest plugin via `extism:host/env::http_request`.
+pub(all) struct ExtismHttpRequest {
+  http_method : String
+  url : String
+  host : String
+  body : Array[Byte]
+} derive(Debug, Eq)
+
+///|
+/// ExtismHttpResponse encapsulates the HTTP response returned to a guest plugin.
+pub(all) struct ExtismHttpResponse {
+  status_code : Int32
+  body : Array[Byte]
+} derive(Debug, Eq)
+
+///|
 /// ExtismKernel manages the host-side state and memory allocation table for Extism PDK plugins.
 pub(all) struct ExtismKernel {
   blocks : Array[ExtismMemBlock]
@@ -30,6 +46,9 @@ pub(all) struct ExtismKernel {
   vars : Array[(String, Array[Byte])]
   logs : Array[(String, String)]
   mut last_http_status : Int32
+  mut max_var_bytes : Int32
+  mut max_http_response_bytes : Int32
+  mut http_handler : ((ExtismHttpRequest) -> ExtismHttpResponse)?
 }
 
 ///|
@@ -46,7 +65,30 @@ pub fn ExtismKernel::new() -> ExtismKernel {
     vars: [],
     logs: [],
     last_http_status: 0,
+    max_var_bytes: 1048576,
+    max_http_response_bytes: 1048576,
+    http_handler: None,
   }
+}
+
+///|
+/// Sets a custom host HTTP transport handler for `extism:host/env::http_request`.
+pub fn ExtismKernel::set_http_handler(
+  self : ExtismKernel,
+  handler : (ExtismHttpRequest) -> ExtismHttpResponse,
+) -> Unit {
+  self.http_handler = Some(handler)
+}
+
+///|
+/// Computes the total bytes currently stored in `ExtismKernel.vars`.
+pub fn ExtismKernel::total_var_bytes(self : ExtismKernel) -> Int32 {
+  let mut total = 0
+  for item in self.vars {
+    let (_, v) = item
+    total = total + v.length()
+  }
+  total
 }
 
 ///|
@@ -686,6 +728,20 @@ pub fn register_extism_host_functions(
           Ok(b) => b
           Err(e) => return Err(e)
         }
+        // Enforce Extism max_var_bytes quota
+        let current_bytes = kernel.total_var_bytes()
+        let prev_len = match kernel.get_var(key) {
+          Some(old) => old.length()
+          None => 0
+        }
+        if current_bytes - prev_len + bytes.length() > kernel.max_var_bytes {
+          return Err(
+            Trap::HostError(
+              "Extism var_set quota exceeded: max_var_bytes=" +
+              kernel.max_var_bytes.to_string(),
+            ),
+          )
+        }
         kernel.set_var(key, bytes)
         Ok([])
       }),
@@ -703,6 +759,11 @@ pub fn register_extism_host_functions(
             Value::I32(v) => v.to_int64()
             _ => 0L
           }
+          let body_off = match args[1] {
+            Value::I64(v) => v
+            Value::I32(v) => v.to_int64()
+            _ => 0L
+          }
           let mem = match ctx.get_memory() {
             Ok(m) => m
             Err(e) => return Err(e)
@@ -711,18 +772,62 @@ pub fn register_extism_host_functions(
             Ok(s) => s
             Err(e) => return Err(e)
           }
+          let req_body : Array[Byte] = if body_off > 0L {
+            let blen = kernel.block_length(body_off)
+            if blen > 0L {
+              match mem.read_bytes(body_off.to_int(), blen.to_int()) {
+                Ok(b) => b
+                Err(_) => []
+              }
+            } else {
+              []
+            }
+          } else {
+            []
+          }
           let host = extract_host_from_extism_request(req_str)
           match sec_guard.check_network(host) {
-            Ok(_) => {
-              kernel.last_http_status = 200
-              let resp = "{\"status\":200,\"host\":\"" +
-                host +
-                "\",\"ok\":true}"
-              match kernel.alloc_and_write_string(mem, Some(sec_guard), resp) {
-                Ok(off) => Ok([Value::I64(off)])
-                Err(e) => Err(e)
+            Ok(_) =>
+              match kernel.http_handler {
+                Some(handler) => {
+                  let req_obj : ExtismHttpRequest = {
+                    http_method: "GET",
+                    url: req_str,
+                    host,
+                    body: req_body,
+                  }
+                  let resp_obj = handler(req_obj)
+                  kernel.last_http_status = resp_obj.status_code
+                  if resp_obj.body.length() > kernel.max_http_response_bytes {
+                    kernel.last_http_status = 413
+                    return Ok([Value::I64(0L)])
+                  }
+                  match
+                    kernel.alloc_and_write_bytes(
+                      mem,
+                      Some(sec_guard),
+                      resp_obj.body,
+                    ) {
+                    Ok(off) => Ok([Value::I64(off)])
+                    Err(e) => Err(e)
+                  }
+                }
+                None => {
+                  kernel.last_http_status = 200
+                  let resp = "{\"status\":200,\"host\":\"" +
+                    host +
+                    "\",\"ok\":true}"
+                  if resp.length() > kernel.max_http_response_bytes {
+                    kernel.last_http_status = 413
+                    return Ok([Value::I64(0L)])
+                  }
+                  match
+                    kernel.alloc_and_write_string(mem, Some(sec_guard), resp) {
+                    Ok(off) => Ok([Value::I64(off)])
+                    Err(e) => Err(e)
+                  }
+                }
               }
-            }
             Err(_) => {
               kernel.last_http_status = 403
               Ok([Value::I64(0L)])

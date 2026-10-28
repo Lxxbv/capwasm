@@ -305,3 +305,383 @@ test "extism: capability-gated http_request and config/var state store" {
   assert_eq(logs[0].allowed, true)
   assert_eq(logs[1].allowed, false)
 }
+
+///|
+test "manifest: ExtismManifest JSON parser, wildcard hosts, and path mount resolution" {
+  let json =
+    #|{
+    #|  "plugin_id": "markdown-sanitizer",
+    #|  "max_pages": 8,
+    #|  "max_var_bytes": 4096,
+    #|  "max_http_response_bytes": 16384,
+    #|  "config": { "theme": "dark", "strict": "true" },
+    #|  "allowed_hosts": ["*.moonbitlang.com", "api.github.com"],
+    #|  "allowed_paths": { "ro:/host/tenant_a/docs": "/docs", "/host/tenant_a/out": "/out" },
+    #|  "allowed_env_vars": ["LANG", "TZ"]
+    #|}
+  let manifest = match @capwasm.ExtismManifest::from_json(json) {
+    Ok(m) => m
+    Err(_) => {
+      assert_true(false)
+      return
+    }
+  }
+  assert_eq(manifest.plugin_id, "markdown-sanitizer")
+  assert_eq(manifest.memory.max_pages, 8)
+  assert_eq(manifest.memory.max_var_bytes, 4096)
+  assert_eq(manifest.memory.max_http_response_bytes, 16384)
+  assert_eq(manifest.allowed_hosts.length(), 2)
+  assert_eq(manifest.allowed_paths.length(), 2)
+
+  // Verify wildcard host matching (*.moonbitlang.com)
+  let policy = manifest.to_capability_policy()
+  let sec_guard = @capwasm.PluginSecurityGuard::new(
+    "markdown-sanitizer", policy,
+  )
+  assert_eq(sec_guard.check_network("mooncakes.moonbitlang.com"), Ok(()))
+  assert_eq(sec_guard.check_network("docs.sub.moonbitlang.com"), Ok(()))
+  assert_true(sec_guard.check_network("evil.com") is Err(_))
+
+  // Verify guest-to-host path mount resolution & read-only enforcement
+  let r_read = @capwasm.resolve_mounted_path(
+    manifest.allowed_paths,
+    "/docs/guide.md",
+    false,
+  )
+  assert_eq(r_read, Ok("/host/tenant_a/docs/guide.md"))
+
+  // Writing to read-only mount "/docs" must be rejected
+  let r_write_ro = @capwasm.resolve_mounted_path(
+    manifest.allowed_paths,
+    "/docs/hack.md",
+    true,
+  )
+  assert_true(r_write_ro is Err(@capwasm.SecurityError::PermissionDenied(_)))
+
+  // Writing to read-write mount "/out" must succeed
+  let r_write_rw = @capwasm.resolve_mounted_path(
+    manifest.allowed_paths,
+    "/out/rendered.html",
+    true,
+  )
+  assert_eq(r_write_rw, Ok("/host/tenant_a/out/rendered.html"))
+}
+
+///|
+test "pdk & manifest: encode_to_bytes round-trip, FNV-1a hash check, WASI path_open & call_indirect" {
+  // Construct a Wasm module using WasmModule AST + encode_to_bytes that:
+  // 1. Imports wasi_snapshot_preview1::clock_time_get (type 0: (i32, i64, i32) -> i32)
+  // 2. Defines a table of 2 functions and uses CallIndirect (type 1: (i32) -> i32)
+  //    - func 1 (double): x * 2
+  //    - func 2 (triple): x * 3
+  //    - func 3 (exported "compute"): calls clock_time_get, then call_indirect(op_idx, val)
+  let t_clock = @capwasm.FuncType::new(
+    [@capwasm.ValueType::I32, @capwasm.ValueType::I64, @capwasm.ValueType::I32],
+    [@capwasm.ValueType::I32],
+  )
+  let t_unary = @capwasm.FuncType::new([@capwasm.ValueType::I32], [
+    @capwasm.ValueType::I32,
+  ])
+  let t_entry = @capwasm.FuncType::new(
+    [@capwasm.ValueType::I32, @capwasm.ValueType::I32],
+    [@capwasm.ValueType::I32],
+  )
+
+  let mod_ast : @capwasm.WasmModule = {
+    types: [t_clock, t_unary, t_entry],
+    imports: [
+      @capwasm.ImportEntry::new(
+        "wasi_snapshot_preview1",
+        "clock_time_get",
+        @capwasm.ImportDesc::Func(0),
+      ),
+    ],
+    func_types: [1, 1, 2],
+    tables: [
+      @capwasm.TableType::new(@capwasm.Limits::{ min: 2, max: Some(2), }),
+    ],
+    memories: [
+      @capwasm.MemoryType::new(@capwasm.Limits::{ min: 1, max: Some(4), }),
+    ],
+    globals: [],
+    exports: [
+      @capwasm.ExportEntry::new("compute", @capwasm.ExportDesc::Func(3)),
+    ],
+    start_func: None,
+    elements: [
+      @capwasm.ElementSegment::new(
+        0,
+        [@capwasm.Instruction::I32Const(0), @capwasm.Instruction::End],
+        [1, 2],
+      ),
+    ],
+    code: [
+      // func 1 (index 1): x * 2
+      @capwasm.FunctionBody::new([], [
+        @capwasm.Instruction::LocalGet(0),
+        @capwasm.Instruction::I32Const(2),
+        @capwasm.Instruction::I32Mul,
+        @capwasm.Instruction::End,
+      ]),
+      // func 2 (index 2): x * 3
+      @capwasm.FunctionBody::new([], [
+        @capwasm.Instruction::LocalGet(0),
+        @capwasm.Instruction::I32Const(3),
+        @capwasm.Instruction::I32Mul,
+        @capwasm.Instruction::End,
+      ]),
+      // func 3 (index 3): (val, table_slot) -> calls clock_time_get(0, 1000L, 64), then call_indirect(type 1)
+      @capwasm.FunctionBody::new([], [
+        @capwasm.Instruction::I32Const(0),
+        @capwasm.Instruction::I64Const(1000L),
+        @capwasm.Instruction::I32Const(64),
+        @capwasm.Instruction::Call(0),
+        @capwasm.Instruction::Drop,
+        @capwasm.Instruction::LocalGet(0),
+        @capwasm.Instruction::LocalGet(1),
+        @capwasm.Instruction::CallIndirect(1, 0),
+        @capwasm.Instruction::End,
+      ]),
+    ],
+    data: [],
+  }
+
+  let wasm_bytes = mod_ast.encode_to_bytes()
+  let fingerprint = @capwasm.compute_wasm_fingerprint(wasm_bytes)
+
+  let vfs = @capwasm.VirtualFileSystem::new()
+  let _ = vfs.create_file("/plugins/math.wasm", wasm_bytes)
+
+  // 1. Tampered hash in manifest must be rejected with PermissionDenied
+  let bad_manifest = @capwasm.ExtismManifest::new("tampered-plugin").with_wasm_path(
+    "math",
+    "/plugins/math.wasm",
+    Some("0000000000000000"),
+  )
+  let bad_load = @capwasm.PluginInstance::load_from_manifest(bad_manifest, vfs)
+  assert_true(bad_load is Err(@capwasm.SecurityError::PermissionDenied(_)))
+
+  // 2. Valid hash in manifest loads and executes CallIndirect + WASI clock_time_get
+  let good_manifest = @capwasm.ExtismManifest::new("verified-plugin").with_wasm_path(
+    "math",
+    "/plugins/math.wasm",
+    Some(fingerprint),
+  )
+  let plugin = match
+    @capwasm.PluginInstance::load_from_manifest(good_manifest, vfs) {
+    Ok(p) => p
+    Err(e) => {
+      println("Manifest load error: " + e.to_string())
+      assert_true(false)
+      return
+    }
+  }
+
+  let res_double = plugin.call("compute", [
+    @capwasm.Value::I32(21),
+    @capwasm.Value::I32(0),
+  ])
+  assert_eq(res_double, Ok([@capwasm.Value::I32(42)]))
+
+  let res_triple = plugin.call("compute", [
+    @capwasm.Value::I32(21),
+    @capwasm.Value::I32(1),
+  ])
+  assert_eq(res_triple, Ok([@capwasm.Value::I32(63)]))
+}
+
+///|
+test "wasi & extism: end-to-end WASI path_open + fd_read + Extism output_set via mounted virtual directory" {
+  // Build a Wasm guest module that:
+  // 1. Imports wasi_snapshot_preview1::path_open, fd_read, fd_close
+  // 2. Imports extism:host/env::alloc, store_u8, output_set
+  // 3. Opens guest virtual path "/docs/hello.txt" (mapped to host "/host/tenant_a/docs/hello.txt"),
+  //    reads 5 bytes ("HELLO") via WASI iovec into linear memory, copies first byte into an
+  //    Extism kernel memory block, and publishes it via output_set.
+  let t_path_open = @capwasm.FuncType::new(
+    [
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I64,
+      @capwasm.ValueType::I64,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+    ],
+    [@capwasm.ValueType::I32],
+  )
+  let t_fd_read = @capwasm.FuncType::new(
+    [
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+      @capwasm.ValueType::I32,
+    ],
+    [@capwasm.ValueType::I32],
+  )
+  let t_fd_close = @capwasm.FuncType::new([@capwasm.ValueType::I32], [
+    @capwasm.ValueType::I32,
+  ])
+  let t_alloc = @capwasm.FuncType::new([@capwasm.ValueType::I64], [
+    @capwasm.ValueType::I64,
+  ])
+  let t_store_u8 = @capwasm.FuncType::new(
+    [@capwasm.ValueType::I64, @capwasm.ValueType::I32],
+    [],
+  )
+  let t_output_set = @capwasm.FuncType::new(
+    [@capwasm.ValueType::I64, @capwasm.ValueType::I64],
+    [],
+  )
+  let t_run = @capwasm.FuncType::new([], [@capwasm.ValueType::I32])
+
+  // Data segment at offset 16: "/docs/hello.txt" (15 bytes)
+  let guest_path_bytes = @capwasm.BinaryReader::from_string("/docs/hello.txt").bytes
+
+  let mod_ast : @capwasm.WasmModule = {
+    types: [
+      t_path_open, t_fd_read, t_fd_close, t_alloc, t_store_u8, t_output_set, t_run,
+    ],
+    imports: [
+      @capwasm.ImportEntry::new(
+        "wasi_snapshot_preview1",
+        "path_open",
+        @capwasm.ImportDesc::Func(0),
+      ),
+      @capwasm.ImportEntry::new(
+        "wasi_snapshot_preview1",
+        "fd_read",
+        @capwasm.ImportDesc::Func(1),
+      ),
+      @capwasm.ImportEntry::new(
+        "wasi_snapshot_preview1",
+        "fd_close",
+        @capwasm.ImportDesc::Func(2),
+      ),
+      @capwasm.ImportEntry::new(
+        "extism:host/env",
+        "alloc",
+        @capwasm.ImportDesc::Func(3),
+      ),
+      @capwasm.ImportEntry::new(
+        "extism:host/env",
+        "store_u8",
+        @capwasm.ImportDesc::Func(4),
+      ),
+      @capwasm.ImportEntry::new(
+        "extism:host/env",
+        "output_set",
+        @capwasm.ImportDesc::Func(5),
+      ),
+    ],
+    func_types: [6],
+    tables: [],
+    memories: [
+      @capwasm.MemoryType::new(@capwasm.Limits::{ min: 2, max: Some(8), }),
+    ],
+    globals: [],
+    exports: [
+      @capwasm.ExportEntry::new("read_doc", @capwasm.ExportDesc::Func(6)),
+    ],
+    start_func: None,
+    elements: [],
+    code: [
+      @capwasm.FunctionBody::new(
+        [
+          @capwasm.LocalDecl::new(1, @capwasm.ValueType::I32), // local 0: fd
+          @capwasm.LocalDecl::new(1, @capwasm.ValueType::I64), // local 1: out_ptr
+        ],
+        [
+          // Call path_open(dirfd=3, dirflags=0, path_ptr=16, path_len=15, oflags=0, rights_base=2, rights_inh=0, fdflags=0, opened_fd_ptr=64)
+          @capwasm.Instruction::I32Const(3),
+          @capwasm.Instruction::I32Const(0),
+          @capwasm.Instruction::I32Const(16),
+          @capwasm.Instruction::I32Const(15),
+          @capwasm.Instruction::I32Const(0),
+          @capwasm.Instruction::I64Const(2L),
+          @capwasm.Instruction::I64Const(0L),
+          @capwasm.Instruction::I32Const(0),
+          @capwasm.Instruction::I32Const(64),
+          @capwasm.Instruction::Call(0),
+          @capwasm.Instruction::Drop,
+          // Load opened fd from address 64 -> local 0
+          @capwasm.Instruction::I32Const(64),
+          @capwasm.Instruction::I32Load(@capwasm.MemArg::new(2, 0)),
+          @capwasm.Instruction::LocalSet(0),
+          // Set up iovec at address 80: { buf_ptr: 128, buf_len: 5 }
+          @capwasm.Instruction::I32Const(80),
+          @capwasm.Instruction::I32Const(128),
+          @capwasm.Instruction::I32Store(@capwasm.MemArg::new(2, 0)),
+          @capwasm.Instruction::I32Const(84),
+          @capwasm.Instruction::I32Const(5),
+          @capwasm.Instruction::I32Store(@capwasm.MemArg::new(2, 0)),
+          // Call fd_read(fd=local 0, iovs_ptr=80, iovs_len=1, nread_ptr=96)
+          @capwasm.Instruction::LocalGet(0),
+          @capwasm.Instruction::I32Const(80),
+          @capwasm.Instruction::I32Const(1),
+          @capwasm.Instruction::I32Const(96),
+          @capwasm.Instruction::Call(1),
+          @capwasm.Instruction::Drop,
+          // Call fd_close(local 0)
+          @capwasm.Instruction::LocalGet(0),
+          @capwasm.Instruction::Call(2),
+          @capwasm.Instruction::Drop,
+          // Allocate 2 bytes via extism alloc(2) -> local 1
+          @capwasm.Instruction::I64Const(2L),
+          @capwasm.Instruction::Call(3),
+          @capwasm.Instruction::LocalSet(1),
+          // Copy first 2 bytes from linear memory [128..129] into Extism block
+          @capwasm.Instruction::LocalGet(1),
+          @capwasm.Instruction::I32Const(128),
+          @capwasm.Instruction::I32Load8U(@capwasm.MemArg::new(0, 0)),
+          @capwasm.Instruction::Call(4),
+          @capwasm.Instruction::LocalGet(1),
+          @capwasm.Instruction::I64Const(1L),
+          @capwasm.Instruction::I64Add,
+          @capwasm.Instruction::I32Const(129),
+          @capwasm.Instruction::I32Load8U(@capwasm.MemArg::new(0, 0)),
+          @capwasm.Instruction::Call(4),
+          // Publish output_set(local 1, 2)
+          @capwasm.Instruction::LocalGet(1),
+          @capwasm.Instruction::I64Const(2L),
+          @capwasm.Instruction::Call(5),
+          @capwasm.Instruction::I32Const(0),
+          @capwasm.Instruction::End,
+        ],
+      ),
+    ],
+    data: [
+      @capwasm.DataSegment::new(
+        0,
+        [@capwasm.Instruction::I32Const(16), @capwasm.Instruction::End],
+        guest_path_bytes,
+      ),
+    ],
+  }
+
+  let wasm_bytes = mod_ast.encode_to_bytes()
+  let vfs = @capwasm.VirtualFileSystem::new()
+  let _ = vfs.create_file("/plugins/doc_reader.wasm", wasm_bytes)
+  let _ = vfs.create_file(
+    "/host/tenant_a/docs/hello.txt",
+    @capwasm.BinaryReader::from_string("OK_FROM_WASI").bytes,
+  )
+
+  let manifest = @capwasm.ExtismManifest::new("doc-reader")
+    .with_wasm_path("doc-reader", "/plugins/doc_reader.wasm", None)
+    .with_mount("/host/tenant_a/docs", "/docs", true)
+  let plugin = match
+    @capwasm.PluginInstance::load_from_manifest(manifest, vfs) {
+    Ok(p) => p
+    Err(e) => {
+      println("Load error: " + e.to_string())
+      assert_true(false)
+      return
+    }
+  }
+
+  let out = plugin.call_string("read_doc", "")
+  assert_eq(out, Ok("OK"))
+}

@@ -8,7 +8,13 @@ import {
 // Values
 pub fn canonicalize_path(String) -> Result[String, SecurityError]
 
+pub fn compute_wasm_fingerprint(Array[Byte]) -> String
+
+pub fn encode_instruction(Array[Byte], Instruction) -> Unit
+
 pub fn extract_host_from_extism_request(String) -> String
+
+pub fn match_host_wildcard(String, String) -> Bool
 
 pub let page_size : Int32
 
@@ -29,6 +35,12 @@ pub fn parse_mem_arg(BinaryReader) -> Result[MemArg, DecodeError]
 pub fn parse_value_type(Byte) -> Result[ValueType, DecodeError]
 
 pub fn register_extism_host_functions(Linker, ExtismKernel, PluginSecurityGuard) -> Unit
+
+pub fn register_wasi_preview1_host_functions(Linker, PluginSecurityGuard, VirtualFileSystem, WasiFdTable, WasiEnvironment) -> Unit
+
+pub fn resolve_mounted_path(Array[ExtismPathMount], String, Bool) -> Result[String, SecurityError]
+
+pub fn verify_wasm_fingerprint(Array[Byte], String) -> Bool
 
 pub let wasi_errno_access : Int32
 
@@ -131,6 +143,7 @@ pub(all) struct CapabilityPolicyBuilder {
   mut quota : ResourceQuota
 }
 pub fn CapabilityPolicyBuilder::allow_clock(Self, Bool) -> Self
+pub fn CapabilityPolicyBuilder::allow_env_var(Self, String) -> Self
 pub fn CapabilityPolicyBuilder::allow_network_host(Self, String) -> Self
 pub fn CapabilityPolicyBuilder::allow_read_path(Self, String) -> Self
 pub fn CapabilityPolicyBuilder::allow_write_path(Self, String) -> Self
@@ -203,6 +216,18 @@ pub(all) struct ExportEntry {
 pub fn ExportEntry::new(String, ExportDesc) -> Self
 pub impl Show for ExportEntry
 
+pub(all) struct ExtismHttpRequest {
+  http_method : String
+  url : String
+  host : String
+  body : Array[Byte]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExtismHttpResponse {
+  status_code : Int32
+  body : Array[Byte]
+} derive(Eq, @debug.Debug)
+
 pub(all) struct ExtismKernel {
   blocks : Array[ExtismMemBlock]
   mut next_alloc_offset : Int64
@@ -214,6 +239,9 @@ pub(all) struct ExtismKernel {
   vars : Array[(String, Array[Byte])]
   logs : Array[(String, String)]
   mut last_http_status : Int32
+  mut max_var_bytes : Int32
+  mut max_http_response_bytes : Int32
+  mut http_handler : ((ExtismHttpRequest) -> ExtismHttpResponse)?
 }
 pub fn ExtismKernel::alloc(Self, LinearMemory, PluginSecurityGuard?, Int64) -> Result[Int64, Trap]
 pub fn ExtismKernel::alloc_and_write_bytes(Self, LinearMemory, PluginSecurityGuard?, Array[Byte]) -> Result[Int64, Trap]
@@ -226,7 +254,31 @@ pub fn ExtismKernel::get_var(Self, String) -> Array[Byte]?
 pub fn ExtismKernel::new() -> Self
 pub fn ExtismKernel::read_block_string(Self, LinearMemory, Int64) -> Result[String, Trap]
 pub fn ExtismKernel::set_config(Self, String, String) -> Unit
+pub fn ExtismKernel::set_http_handler(Self, (ExtismHttpRequest) -> ExtismHttpResponse) -> Unit
 pub fn ExtismKernel::set_var(Self, String, Array[Byte]) -> Unit
+pub fn ExtismKernel::total_var_bytes(Self) -> Int32
+
+pub(all) struct ExtismManifest {
+  plugin_id : String
+  wasm_sources : Array[ExtismWasmSource]
+  memory : ExtismMemoryOptions
+  config : Array[(String, String)]
+  allowed_hosts : Array[String]
+  allowed_paths : Array[ExtismPathMount]
+  allowed_env_vars : Array[String]
+  allow_clock : Bool
+  timeout_ms : Int32
+  max_execution_steps : Int32
+} derive(Eq, @debug.Debug)
+pub fn ExtismManifest::from_json(String) -> Result[Self, String]
+pub fn ExtismManifest::new(String) -> Self
+pub fn ExtismManifest::to_capability_policy(Self) -> CapabilityPolicy
+pub fn ExtismManifest::with_allowed_host(Self, String) -> Self
+pub fn ExtismManifest::with_config(Self, String, String) -> Self
+pub fn ExtismManifest::with_memory_options(Self, Int32, Int32, Int32) -> Self
+pub fn ExtismManifest::with_mount(Self, String, String, Bool) -> Self
+pub fn ExtismManifest::with_wasm_bytes(Self, String, Array[Byte], String?) -> Self
+pub fn ExtismManifest::with_wasm_path(Self, String, String, String?) -> Self
 
 pub(all) struct ExtismMemBlock {
   offset : Int64
@@ -234,6 +286,25 @@ pub(all) struct ExtismMemBlock {
   mut active : Bool
 } derive(Eq, @debug.Debug)
 pub impl Show for ExtismMemBlock
+
+pub(all) struct ExtismMemoryOptions {
+  max_pages : Int32
+  max_http_response_bytes : Int32
+  max_var_bytes : Int32
+} derive(Eq, @debug.Debug)
+pub fn ExtismMemoryOptions::default() -> Self
+
+pub(all) struct ExtismPathMount {
+  host_path : String
+  guest_path : String
+  read_only : Bool
+} derive(Eq, @debug.Debug)
+pub fn ExtismPathMount::new(String, String, Bool) -> Self
+
+pub(all) enum ExtismWasmSource {
+  InlineBytes(String, Array[Byte], String?)
+  VfsPath(String, String, String?)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct FuncType {
   params : Array[ValueType]
@@ -570,6 +641,7 @@ pub(all) struct PluginInstance {
   sec_guard : PluginSecurityGuard
   linker : Linker
   fd_table : WasiFdTable
+  wasi_env : WasiEnvironment
   extism_kernel : ExtismKernel
   metrics : PluginMetrics
 }
@@ -581,6 +653,7 @@ pub fn PluginInstance::get_extism_logs(Self) -> Array[(String, String)]
 pub fn PluginInstance::get_extism_var(Self, String) -> Array[Byte]?
 pub fn PluginInstance::get_metrics(Self) -> PluginMetrics
 pub fn PluginInstance::load(PluginConfig, Array[Byte]) -> Result[Self, SecurityError]
+pub fn PluginInstance::load_from_manifest(ExtismManifest, VirtualFileSystem) -> Result[Self, SecurityError]
 pub fn PluginInstance::reset(Self) -> Result[Unit, SecurityError]
 pub fn PluginInstance::set_extism_config(Self, String, String) -> Unit
 pub fn PluginInstance::set_extism_var(Self, String, Array[Byte]) -> Unit
@@ -599,6 +672,8 @@ pub(all) struct PluginSecurityGuard {
   audit_logs : Array[AuditRecord]
   mut consumed_steps : Int32
 }
+pub fn PluginSecurityGuard::check_clock(Self) -> Result[Unit, SecurityError]
+pub fn PluginSecurityGuard::check_env(Self, String) -> Result[Unit, SecurityError]
 pub fn PluginSecurityGuard::check_fs_read(Self, String) -> Result[Unit, SecurityError]
 pub fn PluginSecurityGuard::check_fs_write(Self, String) -> Result[Unit, SecurityError]
 pub fn PluginSecurityGuard::check_memory_grow(Self, Int32) -> Result[Unit, SecurityError]
@@ -621,6 +696,12 @@ pub(all) enum SecurityError {
   Aborted(String)
 } derive(Eq, @debug.Debug)
 pub impl Show for SecurityError
+
+pub(all) struct TableInstance {
+  elements : Array[Int32?]
+  limits : Limits
+}
+pub fn TableInstance::new(Limits) -> Self
 
 pub(all) struct TableType {
   limits : Limits
@@ -680,7 +761,22 @@ pub fn VirtualFileSystem::find_file(Self, String) -> InMemoryFile?
 pub fn VirtualFileSystem::mount(Self, String, String) -> Unit
 pub fn VirtualFileSystem::new() -> Self
 pub fn VirtualFileSystem::read_file(Self, String) -> Result[Array[Byte], SecurityError]
+pub fn VirtualFileSystem::remove_file(Self, String) -> Result[Unit, SecurityError]
 pub fn VirtualFileSystem::write_file(Self, String, Array[Byte]) -> Result[Int32, SecurityError]
+
+pub(all) struct WasiEnvironment {
+  args : Array[String]
+  env_vars : Array[(String, String)]
+  mounts : Array[ExtismPathMount]
+  mut virtual_clock_ns : Int64
+  mut prng_state : UInt64
+  mut last_exit_code : Int32?
+}
+pub fn WasiEnvironment::add_arg(Self, String) -> Unit
+pub fn WasiEnvironment::add_mount(Self, ExtismPathMount) -> Unit
+pub fn WasiEnvironment::new() -> Self
+pub fn WasiEnvironment::next_random_byte(Self) -> Byte
+pub fn WasiEnvironment::set_env(Self, String, String) -> Unit
 
 pub(all) struct WasiFd {
   fd : Int32
@@ -707,6 +803,8 @@ pub(all) struct WasmInstance {
   functions : Array[FunctionInstance]
   memories : Array[LinearMemory]
   globals : Array[GlobalInstance]
+  mut tables : Array[TableInstance]
+  mut types : Array[FuncType]
   stack : OperandStack
   call_stack : Array[CallFrame]
   control_stack : Array[ControlFrame]
@@ -735,6 +833,7 @@ pub(all) struct WasmModule {
   data : Array[DataSegment]
 } derive(Eq)
 pub fn WasmModule::empty() -> Self
+pub fn WasmModule::encode_to_bytes(Self) -> Array[Byte]
 pub fn WasmModule::find_func_export(Self, String) -> Int32?
 pub fn WasmModule::get_export(Self, String) -> ExportDesc?
 pub fn WasmModule::get_func_type(Self, Int32) -> Result[FuncType, Trap]
