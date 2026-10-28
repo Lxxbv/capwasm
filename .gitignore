@@ -5,3 +5,5 @@ target
 .mooncakes/
 .moonagent/
 *项目申报书.md
+AGENTS.md
+.github/

@@ -1,4 +1,4 @@
-# CapWasm 🛡️
+# CapWasm
 
 **基于能力安全与 Extism/WASI 双协议栈兼容的纯 MoonBit WebAssembly 插件沙箱运行时**  
 *(Capability-Based WebAssembly Plugin Sandbox & Extism/WASI Host Kernel in Pure MoonBit)*
@@ -10,7 +10,7 @@
 
 ---
 
-## 📖 项目简介与核心定位 (Overview & Positioning)
+## 一、 项目简介与核心定位 (Overview & Positioning)
 
 **CapWasm** (`Lxxbv/capwasm`) 是一个 100% 纯 MoonBit 编写、零外部 C/Rust FFI 依赖的 **能力安全（Capability-based Security）WebAssembly 插件沙箱与 Extism/WASI 宿主内核**。
 
@@ -21,7 +21,7 @@
 
 ---
 
-## 🎯 与对标的类似生态库定位及功能对比 (Ecosystem Comparison)
+## 二、 与对标的类似生态库定位及功能对比 (Ecosystem Comparison)
 
 下表将 **CapWasm** 与 MoonBit 社区现有的 Wasm/沙箱类项目（`moonbitlang/wasm5`、`mizchi/wasmx`、`tuya-me/aegisrun`、`mizchi/wacon`）以及业界主流插件框架 `Extism (Rust/C SDK)` 进行定位与功能对比：
 
@@ -40,7 +40,7 @@
 
 ---
 
-## 🏗️ 现有底座之外的实质贡献详解 (Substantive Contributions Beyond Base VM)
+## 三、 现有底座之外的实质贡献详解 (Substantive Contributions Beyond Base VM)
 
 CapWasm 共包含 **10,643 行纯 MoonBit 源码**（含 `.mbti` 接口文件共 **11,495 行**）。其中，底层受控 Wasm 1.0 执行底座为 **4,415 行**，而 **构建在底座之上的沙箱安全、WASI 虚拟化与 Extism 插件内核实质贡献代码达 4,540 行（另有 1,688 行测试与演示代码）**：
 
@@ -82,7 +82,7 @@ CapWasm 共包含 **10,643 行纯 MoonBit 源码**（含 `.mbti` 接口文件共
 
 ---
 
-## 🔌 Extism 兼容机制与真实插件接入证明 (`extism:host/env` + `wasi_snapshot_preview1`)
+## 四、 Extism 兼容机制与真实插件接入证明 (`extism:host/env` + `wasi_snapshot_preview1`)
 
 CapWasm 通过四阶段全链路机制接入标准 Extism 插件：
 1. **Manifest 解析与二进制哈希校验 ([`manifest.mbt`](manifest.mbt))**：通过 `ExtismManifest::from_json` 解析插件配置、内存/变量配额、域名白名单与虚拟挂载表（如 `"ro:/host/tenant_a/docs": "/docs"`），并在加载前校验 `.wasm` 镜像的 64 位 FNV-1a 指纹。
@@ -92,7 +92,7 @@ CapWasm 通过四阶段全链路机制接入标准 Extism 插件：
 
 ---
 
-## 🚀 快速开始与一键验证 (Quick Start)
+## 五、 快速开始与一键验证 (Quick Start)
 
 ### 1. 运行全部 50 项单元与端到端集成测试
 ```bash
@@ -121,6 +121,6 @@ moon run cmd/main
 
 ---
 
-## 📄 开源协议 (License)
+## 六、 开源协议 (License)
 
-本项目基于 [Apache-2.0 License](LICENSE) 开源。详细项目申报书请参阅 [`项目申报书.md`](项目申报书.md) 或 [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md)。
+本项目基于 [Apache-2.0 License](LICENSE) 开源。详细项目申报书请参阅 [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md)。
