@@ -242,20 +242,22 @@ pub(all) struct ExtismKernel {
   vars : Array[(String, Array[Byte])]
   logs : Array[(String, String)]
   mut last_http_status : Int32
+  mut last_http_headers : String
+  mut configured_log_level : Int32
   mut max_var_bytes : Int32
   mut max_http_response_bytes : Int32
   mut http_handler : ((ExtismHttpRequest) -> ExtismHttpResponse)?
 }
-pub fn ExtismKernel::alloc(Self, LinearMemory, PluginSecurityGuard?, Int64) -> Result[Int64, Trap]
-pub fn ExtismKernel::alloc_and_write_bytes(Self, LinearMemory, PluginSecurityGuard?, Array[Byte]) -> Result[Int64, Trap]
-pub fn ExtismKernel::alloc_and_write_string(Self, LinearMemory, PluginSecurityGuard?, String) -> Result[Int64, Trap]
+pub fn ExtismKernel::alloc(Self, PluginSecurityGuard?, Int64) -> Result[Int64, Trap]
+pub fn ExtismKernel::alloc_and_write_bytes(Self, PluginSecurityGuard?, Array[Byte]) -> Result[Int64, Trap]
+pub fn ExtismKernel::alloc_and_write_string(Self, PluginSecurityGuard?, String) -> Result[Int64, Trap]
 pub fn ExtismKernel::begin_call(Self, Array[Byte]) -> Unit
 pub fn ExtismKernel::block_length(Self, Int64) -> Int64
 pub fn ExtismKernel::free(Self, Int64) -> Unit
 pub fn ExtismKernel::get_config(Self, String) -> String?
 pub fn ExtismKernel::get_var(Self, String) -> Array[Byte]?
 pub fn ExtismKernel::new() -> Self
-pub fn ExtismKernel::read_block_string(Self, LinearMemory, Int64) -> Result[String, Trap]
+pub fn ExtismKernel::read_block_string(Self, Int64) -> Result[String, Trap]
 pub fn ExtismKernel::set_config(Self, String, String) -> Unit
 pub fn ExtismKernel::set_http_handler(Self, (ExtismHttpRequest) -> ExtismHttpResponse) -> Unit
 pub fn ExtismKernel::set_var(Self, String, Array[Byte]) -> Unit

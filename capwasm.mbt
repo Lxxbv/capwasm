@@ -480,7 +480,7 @@ pub fn PluginSecurityGuard::check_memory_grow(
 }
 
 ///|
-/// Extism-style Memory Slice Descriptor for Host-Plugin communication.
+/// Linear memory range descriptor (offset and byte length) for bounds-checked byte slice operations.
 pub(all) struct MemorySlice {
   offset : Int32
   length : Int32

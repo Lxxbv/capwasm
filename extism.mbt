@@ -50,6 +50,8 @@ pub(all) struct ExtismKernel {
   vars : Array[(String, Array[Byte])]
   logs : Array[(String, String)]
   mut last_http_status : Int32
+  mut last_http_headers : String
+  mut configured_log_level : Int32
   mut max_var_bytes : Int32
   mut max_http_response_bytes : Int32
   mut http_handler : ((ExtismHttpRequest) -> ExtismHttpResponse)?
@@ -73,6 +75,8 @@ pub fn ExtismKernel::new() -> ExtismKernel {
     vars: [],
     logs: [],
     last_http_status: 0,
+    last_http_headers: "{}",
+    configured_log_level: 2,
     max_var_bytes: 1048576,
     max_http_response_bytes: 1048576,
     http_handler: None,
@@ -100,11 +104,14 @@ pub fn ExtismKernel::total_var_bytes(self : ExtismKernel) -> Int32 {
 }
 
 ///|
-/// Resets per-invocation I/O state before executing an Extism plugin entrypoint.
+/// Resets per-invocation I/O state and ephemeral kernel memory blocks before executing an Extism plugin entrypoint.
+/// Persistent `configs` and `vars` are preserved across calls in accordance with the Extism specification.
 pub fn ExtismKernel::begin_call(
   self : ExtismKernel,
   input : Array[Byte],
 ) -> Unit {
+  self.blocks.clear()
+  self.next_alloc_offset = 64L
   self.input_data = input
   self.output_offset = 0L
   self.output_length = 0L
@@ -171,17 +178,19 @@ pub fn ExtismKernel::get_var(self : ExtismKernel, key : String) -> Array[Byte]? 
 }
 
 ///|
-/// Allocates a block of `length` bytes in guest linear memory, growing pages if needed
-/// while enforcing `PluginSecurityGuard::check_memory_grow`.
+/// Allocates a block of `length` bytes in the isolated Extism `kernel_memory` Arena
+/// (never touching guest `memory[0]`), growing kernel memory pages if needed while
+/// enforcing `PluginSecurityGuard::check_memory_grow`.
 pub fn ExtismKernel::alloc(
   self : ExtismKernel,
-  mem : LinearMemory,
   sec_guard : PluginSecurityGuard?,
   length : Int64,
 ) -> Result[Int64, Trap] {
   if length <= 0L {
     return Ok(0L)
   }
+
+  let mem = self.kernel_memory
 
   // 1. Check if an inactive block of sufficient size can be reused
   for i = 0; i < self.blocks.length(); i = i + 1 {
@@ -193,7 +202,7 @@ pub fn ExtismKernel::alloc(
     }
   }
 
-  // 2. Bump-allocate a new block aligned to 8 bytes
+  // 2. Bump-allocate a new block aligned to 8 bytes in isolated kernel_memory
   let offset = self.next_alloc_offset
   let aligned_len = (length + 7L) & -8L
   let end_byte = (offset + aligned_len).to_int()
@@ -245,24 +254,22 @@ pub fn ExtismKernel::block_length(self : ExtismKernel, offset : Int64) -> Int64 
 }
 
 ///|
-/// Reads a UTF-8 string from an Extism memory block handle.
+/// Reads a UTF-8 string from an Extism `kernel_memory` block handle.
 pub fn ExtismKernel::read_block_string(
   self : ExtismKernel,
-  mem : LinearMemory,
   offset : Int64,
 ) -> Result[String, Trap] {
   let len = self.block_length(offset)
   if len <= 0L {
     return Ok("")
   }
-  mem.read_string(offset.to_int(), len.to_int())
+  self.kernel_memory.read_string(offset.to_int(), len.to_int())
 }
 
 ///|
-/// Allocates a new Extism memory block and writes a string into it.
+/// Allocates a new block in isolated `kernel_memory` and writes a UTF-8 string into it.
 pub fn ExtismKernel::alloc_and_write_string(
   self : ExtismKernel,
-  mem : LinearMemory,
   sec_guard : PluginSecurityGuard?,
   str : String,
 ) -> Result[Int64, Trap] {
@@ -270,14 +277,14 @@ pub fn ExtismKernel::alloc_and_write_string(
   if len == 0L {
     return Ok(0L)
   }
-  let off = match self.alloc(mem, sec_guard, len) {
+  let off = match self.alloc(sec_guard, len) {
     Ok(o) => o
     Err(e) => return Err(e)
   }
   if off == 0L {
     return Ok(0L)
   }
-  let _ = match mem.write_string(off.to_int(), str) {
+  let _ = match self.kernel_memory.write_string(off.to_int(), str) {
     Ok(w) => w
     Err(e) => return Err(e)
   }
@@ -285,10 +292,9 @@ pub fn ExtismKernel::alloc_and_write_string(
 }
 
 ///|
-/// Allocates a new Extism memory block and writes a byte array into it.
+/// Allocates a new block in isolated `kernel_memory` and writes a byte array into it.
 pub fn ExtismKernel::alloc_and_write_bytes(
   self : ExtismKernel,
-  mem : LinearMemory,
   sec_guard : PluginSecurityGuard?,
   bytes : Array[Byte],
 ) -> Result[Int64, Trap] {
@@ -296,14 +302,14 @@ pub fn ExtismKernel::alloc_and_write_bytes(
   if len == 0L {
     return Ok(0L)
   }
-  let off = match self.alloc(mem, sec_guard, len) {
+  let off = match self.alloc(sec_guard, len) {
     Ok(o) => o
     Err(e) => return Err(e)
   }
   if off == 0L {
     return Ok(0L)
   }
-  match mem.write_bytes(off.to_int(), bytes) {
+  match self.kernel_memory.write_bytes(off.to_int(), bytes) {
     Ok(_) => Ok(off)
     Err(e) => Err(e)
   }
@@ -421,8 +427,7 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let off = match
-          kernel.alloc(kernel.kernel_memory, Some(sec_guard), len) {
+        let off = match kernel.alloc(Some(sec_guard), len) {
           Ok(o) => o
           Err(e) => return Err(e)
         }
@@ -605,7 +610,7 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let msg = match kernel.read_block_string(kernel.kernel_memory, off) {
+        let msg = match kernel.read_block_string(off) {
           Ok(s) => s
           Err(_) => "Unknown Extism plugin error"
         }
@@ -627,19 +632,13 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let key = match
-          kernel.read_block_string(kernel.kernel_memory, key_off) {
+        let key = match kernel.read_block_string(key_off) {
           Ok(s) => s
           Err(e) => return Err(e)
         }
         match kernel.get_config(key) {
           Some(val) =>
-            match
-              kernel.alloc_and_write_string(
-                kernel.kernel_memory,
-                Some(sec_guard),
-                val,
-              ) {
+            match kernel.alloc_and_write_string(Some(sec_guard), val) {
               Ok(off) => Ok([Value::I64(off)])
               Err(e) => Err(e)
             }
@@ -661,19 +660,13 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let key = match
-          kernel.read_block_string(kernel.kernel_memory, key_off) {
+        let key = match kernel.read_block_string(key_off) {
           Ok(s) => s
           Err(e) => return Err(e)
         }
         match kernel.get_var(key) {
           Some(bytes) =>
-            match
-              kernel.alloc_and_write_bytes(
-                kernel.kernel_memory,
-                Some(sec_guard),
-                bytes,
-              ) {
+            match kernel.alloc_and_write_bytes(Some(sec_guard), bytes) {
               Ok(off) => Ok([Value::I64(off)])
               Err(e) => Err(e)
             }
@@ -700,8 +693,7 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let key = match
-          kernel.read_block_string(kernel.kernel_memory, key_off) {
+        let key = match kernel.read_block_string(key_off) {
           Ok(s) => s
           Err(e) => return Err(e)
         }
@@ -751,8 +743,7 @@ pub fn register_extism_host_functions(
             Value::I32(v) => v.to_int64()
             _ => 0L
           }
-          let req_str = match
-            kernel.read_block_string(kernel.kernel_memory, req_off) {
+          let req_str = match kernel.read_block_string(req_off) {
             Ok(s) => s
             Err(e) => return Err(e)
           }
@@ -786,22 +777,20 @@ pub fn register_extism_host_functions(
                   }
                   let resp_obj = handler(req_obj)
                   kernel.last_http_status = resp_obj.status_code
+                  kernel.last_http_headers = "{\"content-type\":\"application/octet-stream\"}"
                   if resp_obj.body.length() > kernel.max_http_response_bytes {
                     kernel.last_http_status = 413
                     return Ok([Value::I64(0L)])
                   }
                   match
-                    kernel.alloc_and_write_bytes(
-                      kernel.kernel_memory,
-                      Some(sec_guard),
-                      resp_obj.body,
-                    ) {
+                    kernel.alloc_and_write_bytes(Some(sec_guard), resp_obj.body) {
                     Ok(off) => Ok([Value::I64(off)])
                     Err(e) => Err(e)
                   }
                 }
                 None => {
                   kernel.last_http_status = 200
+                  kernel.last_http_headers = "{\"content-type\":\"application/json\"}"
                   let resp = "{\"status\":200,\"host\":\"" +
                     host +
                     "\",\"ok\":true}"
@@ -809,12 +798,7 @@ pub fn register_extism_host_functions(
                     kernel.last_http_status = 413
                     return Ok([Value::I64(0L)])
                   }
-                  match
-                    kernel.alloc_and_write_string(
-                      kernel.kernel_memory,
-                      Some(sec_guard),
-                      resp,
-                    ) {
+                  match kernel.alloc_and_write_string(Some(sec_guard), resp) {
                     Ok(off) => Ok([Value::I64(off)])
                     Err(e) => Err(e)
                   }
@@ -838,10 +822,36 @@ pub fn register_extism_host_functions(
       }),
     )
 
-    // 19. log_info / log_debug / log_warn / log_error (offset: i64) -> void
+    // 19. http_headers() -> i64 (Extism 1.x response headers block handle)
+    linker.register_func(
+      ns,
+      "http_headers",
+      HostFunction::new(FuncType::new([], [ValueType::I64]), fn(_ctx, _args) {
+        match
+          kernel.alloc_and_write_string(
+            Some(sec_guard),
+            kernel.last_http_headers,
+          ) {
+          Ok(off) => Ok([Value::I64(off)])
+          Err(e) => Err(e)
+        }
+      }),
+    )
+
+    // 20. get_log_level() -> i32 (Extism 1.x log level query)
+    linker.register_func(
+      ns,
+      "get_log_level",
+      HostFunction::new(FuncType::new([], [ValueType::I32]), fn(_ctx, _args) {
+        Ok([Value::I32(kernel.configured_log_level)])
+      }),
+    )
+
+    // 21-25. log_trace / log_debug / log_info / log_warn / log_error (offset: i64) -> void
     let log_levels = [
-      ("log_info", "INFO"),
+      ("log_trace", "TRACE"),
       ("log_debug", "DEBUG"),
+      ("log_info", "INFO"),
       ("log_warn", "WARN"),
       ("log_error", "ERROR"),
     ]
@@ -856,7 +866,7 @@ pub fn register_extism_host_functions(
             Value::I32(v) => v.to_int64()
             _ => 0L
           }
-          let msg = match kernel.read_block_string(kernel.kernel_memory, off) {
+          let msg = match kernel.read_block_string(off) {
             Ok(s) => s
             Err(_) => "<invalid log block>"
           }

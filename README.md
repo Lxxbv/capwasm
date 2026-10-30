@@ -5,8 +5,8 @@
 
 [![MoonBit](https://img.shields.io/badge/Language-MoonBit-purple)](https://www.moonbitlang.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Code Size](https://img.shields.io/badge/Pure%20MoonBit%20LOC-10%2C735%20Lines-success)]()
-[![Tests](https://img.shields.io/badge/Tests-50%20Passed%20(100%25)-brightgreen)]()
+[![Code Size](https://img.shields.io/badge/Pure%20MoonBit%20LOC-10%2C674%20Lines-success)]()
+[![Tests](https://img.shields.io/badge/Tests-51%20Passed%20(100%25)-brightgreen)]()
 
 ---
 
@@ -22,7 +22,7 @@
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **核心定位** | 跨语言通用 Wasm 插件框架 | 字节码联盟官方能力安全运行时 | 纯 Go 零依赖 Wasm 沙箱运行时 | 通用云原生 Wasm 容器运行时 | **纯 MoonBit 能力安全插件沙箱 + Extism 宿主内核** |
 | **实现方式与依赖** | Rust `wasmtime` + C FFI 动态库 | Rust + OS 原生 `cap-std` 句柄 | 100% 纯 Go（零 CGO 依赖） | Rust / C++ + 系统级编译器依赖 | **100% 纯 MoonBit（零 C/Rust FFI 外部依赖）** |
-| **Extism Host ABI (`extism:host/env`)** | 官方标准（独立内核内存 Arena） | 不内置（需上层封装） | 不内置（被 Extism Go SDK 底层调用） | 不内置 | **完整实现 19 个宿主函数 + 独立 `kernel_memory` Arena** |
+| **Extism Host ABI (`extism:host/env`)** | 官方标准（独立内核内存 Arena） | 不内置（需上层封装） | 不内置（被 Extism Go SDK 底层调用） | 不内置 | **完整实现 22 个 Extism 1.x 宿主函数 + 独立 `kernel_memory` Arena** |
 | **Manifest 与二进制校验** | JSON Manifest + 标准 `SHA-256` | 无内置 Manifest 规范 | 无内置 Manifest 规范 | WAPM/WASIX 清单 | **兼容 Extism JSON Manifest + 标准 FIPS 180-4 `SHA-256`** |
 | **WASI 虚拟文件系统隔离** | 依赖 Wasmtime 目录映射 | OS 目录句柄级隔离 | 内置内存 `fstest.MapFS` / 只读挂载 | 虚拟 VFS + 宿主机目录映射 | **纯内存 `VirtualFileSystem` + `ro:` 只读挂载 + 19 个 WASI preview1** |
 | **网络与环境变量能力控制** | `allowed_hosts` 域名白名单 | WASI Socket 句柄级门控 | 默认阻断网络，按需注入 | 策略配置放行 | **`*.domain` 通配符域名白名单 + 环境变量白名单 + `../` 路径穿越拦截** |
@@ -34,18 +34,18 @@
 
 ## 三、 核心架构与 Extism 兼容契约
 
-CapWasm 由 **受控 Wasm 1.0 执行底座（4,415 行）** 与 **底座之上的沙箱安全及 Extism/WASI 插件内核层（4,628 行）** 组成：
+CapWasm 由 **受控 Wasm 1.0 执行底座（4,415 行）** 与 **底座之上的沙箱安全及 Extism/WASI 插件内核层（4,553 行）** 组成：
 
-1. **双内存空间隔离契约（消除主客体内存冲突，[`extism.mbt`](extism.mbt) 866 行）**：
+1. **双内存空间隔离契约（消除主客体内存冲突，[`extism.mbt`](extism.mbt) 879 行）**：
    - 严格遵循官方 Extism 内存模型，`ExtismKernel` 维护独立的宿主内核内存空间（`kernel_memory : LinearMemory`），与客体插件自身的 Wasm 线性内存（`instance.memories[0]`）完全物理隔离，绝不侵入或覆盖客体 `.wasm` 模块的 C/Rust/Go/MoonBit 栈空间、数据段与堆分配器。
-   - `extism:host/env`（及兼容别名 `env`）的全部 **19 个宿主函数**（`alloc`、`free`、`length`、`length_unsafe`、`load_u8/u64`、`store_u8/u64`、`input_length`、`input_load_u8/u64`、`output_set`、`error_set`、`config_get`、`var_get/set`、`http_request`、`http_status_code`、`log_*`）统一通过 64 位句柄在 `kernel_memory` 中完成数据交换与空闲块复用，并受 `max_memory_pages`、`max_var_bytes` 与 `max_http_response_bytes` 配额门控。
+   - `extism:host/env`（及兼容别名 `env`）的全部 **22 个 Extism 1.x 宿主函数**（`alloc`、`free`、`length`、`length_unsafe`、`load_u8/u64`、`store_u8/u64`、`input_length`、`input_load_u8/u64`、`output_set`、`error_set`、`config_get`、`var_get/set`、`http_request`、`http_status_code`、`http_headers`、`get_log_level`、`log_trace/debug/info/warn/error`）统一通过 64 位句柄在 `kernel_memory` 中完成数据交换与空闲块复用，并受 `max_memory_pages`、`max_var_bytes` 与 `max_http_response_bytes` 配额门控。
 2. **标准 Extism Manifest 与 FIPS 180-4 `SHA-256` 校验契约（[`manifest.mbt`](manifest.mbt) 665 行）**：
    - `ExtismManifest::from_json` 原生解析标准 Extism 清单字段（`wasm[].path`、`wasm[].hash`、`max_pages`、`max_var_bytes`、`max_http_response_bytes`、`config`、`allowed_hosts`、`allowed_paths`）；
    - 内置纯 MoonBit 实现的 **FIPS 180-4 `SHA-256`** 算法（`compute_wasm_sha256`），在加载插件前对 `.wasm` 字节码执行标准 64 位十六进制 SHA-256 摘要比对，篡改即拒绝实例化。
 3. **能力门控的 `wasi_snapshot_preview1` 与内存态 VFS（[`wasi.mbt`](wasi.mbt) 790 行 + [`vfs.mbt`](vfs.mbt) 500 行 + [`capwasm.mbt`](capwasm.mbt) 492 行）**：
    - 针对 `wasm32-wasi` 编译的真实 Extism 插件，完整实现 **19 个 WASI preview1 系统调用**（`path_open`、`fd_read`、`fd_write`、`fd_seek`、`fd_close`、`fd_prestat_get`、`fd_prestat_dir_name`、`environ_get`、`clock_time_get`、`random_get`、`proc_exit` 等）；
    - 所有文件操作通过 `resolve_mounted_path` 映射至纯内存 `VirtualFileSystem`（支持 `ro:` 只读挂载与 `../` 路径穿越拦截），每次文件、网络、时钟与环境变量访问均由 `PluginSecurityGuard` 鉴权并写入 `AuditRecord` 审计账本。
-4. **内嵌安全钩子的受控执行底座与二进制编译器（[`interpreter.mbt`](interpreter.mbt) 1,617 行 + [`pdk.mbt`](pdk.mbt) 501 行 + [`plugin.mbt`](plugin.mbt) 689 行）**：
+4. **内嵌安全钩子的受控执行底座与二进制编译器（[`interpreter.mbt`](interpreter.mbt) 1,617 行 + [`plugin.mbt`](plugin.mbt) 601 行 + [`pdk.mbt`](pdk.mbt) 501 行）**：
    - 字节码解释器在分派环路内嵌单步 Gas 计费熔断（`Trap::GasExhausted`）与 `memory.grow` 宿主页上限拦截，完整支持 `i32`/`i64` 指令集、嵌套控制流及 `TableInstance` + `CallIndirect` 动态函数表签名校验；`pdk.mbt` 提供完整 11 节 Wasm 二进制编码器以支持端到端闭环验证。
 
 ---
@@ -53,7 +53,7 @@ CapWasm 由 **受控 Wasm 1.0 执行底座（4,415 行）** 与 **底座之上�
 ## 四、 快速验证
 
 ```bash
-moon test           # 运行全部 50 项单元测试与 Extism/WASI 集成测试（50 passed, 0 failed）
+moon test           # 运行全部 51 项单元测试与 Extism/WASI 集成测试（51 passed, 0 failed）
 moon run cmd/main   # 运行包含能力隔离、WASI VFS、Extism SHA-256 Manifest 加载的 7 大场景演示
 ```
 

@@ -446,153 +446,65 @@ pub fn PluginInstance::call(
 }
 
 ///|
-/// Extism Host ABI & Slice ABI dispatcher:
-/// Supports both:
-/// 1. Standard Extism Guest PDK ABI `() -> i32` where the guest interacts via `extism:host/env`
-///    (`input_length`, `input_load_u8`, `alloc`, `store_u8`, `output_set`, `error_set`, etc.).
-/// 2. Direct Linear Memory Slice ABI `(ptr: i32, len: i32) -> i32` for lightweight Wasm modules.
+/// Standard Extism Guest PDK ABI dispatcher (`() -> i32`):
+/// Initializes the isolated `ExtismKernel` input channel, invokes the 0-argument exported
+/// plugin entrypoint, and reads back the output block recorded via `extism:host/env::output_set`
+/// from `ExtismKernel.kernel_memory` without touching guest `memory[0]`.
 pub fn PluginInstance::call_extism(
   self : PluginInstance,
   func_name : String,
   input_data : Array[Byte],
 ) -> Result[Array[Byte], SecurityError] {
-  let mem = match self.instance.get_memory(0) {
-    Ok(m) => m
-    Err(_) =>
-      return Err(
-        SecurityError::Aborted("Plugin instance has no exported memory"),
-      )
-  }
-
-  // Initialize Extism Kernel input channel for this invocation
+  // Initialize Extism Kernel input channel and reset ephemeral kernel blocks for this invocation
   self.extism_kernel.begin_call(input_data)
 
-  // Inspect exported function signature to determine whether it uses 0-arg Extism PDK ABI or 2-arg Slice ABI
-  let param_count = match self.wasm_module.find_func_export(func_name) {
-    Some(fidx) =>
-      match self.wasm_module.get_func_type(fidx) {
-        Ok(ft) => ft.params.length()
-        Err(_) => 0
-      }
+  let _ = match self.wasm_module.find_func_export(func_name) {
+    Some(fidx) => fidx
     None =>
       return Err(
         SecurityError::Aborted("Exported function not found: " + func_name),
       )
   }
 
-  if param_count == 0 {
-    // Standard Extism Guest PDK ABI: `func() -> i32`
-    let ret = match self.call(func_name, []) {
-      Ok(r) => r
-      Err(e) => return Err(e)
-    }
-
-    match self.extism_kernel.error_message {
-      Some(err_msg) =>
-        return Err(SecurityError::Aborted("Extism plugin error: " + err_msg))
-      None => ()
-    }
-
-    if ret.length() > 0 {
-      match ret[0] {
-        Value::I32(rc) =>
-          if rc != 0 {
-            return Err(
-              SecurityError::Aborted(
-                "Extism plugin returned non-zero status code: " + rc.to_string(),
-              ),
-            )
-          }
-        _ => ()
-      }
-    }
-
-    let out_off = self.extism_kernel.output_offset.to_int()
-    let out_len = self.extism_kernel.output_length.to_int()
-    if out_len <= 0 {
-      return Ok([])
-    }
-    match self.extism_kernel.kernel_memory.read_bytes(out_off, out_len) {
-      Ok(out_bytes) => return Ok(out_bytes)
-      Err(e) =>
-        return Err(
-          SecurityError::Aborted(
-            "Failed to read Extism output buffer: " + e.to_string(),
-          ),
-        )
-    }
-  }
-
-  // Direct Slice ABI fallback: write input at offset 1024 and invoke `func(offset, length)`
-  let input_offset = 1024
-  let required_bytes = input_offset + input_data.length() + 1024
-  if required_bytes > mem.size_in_bytes() {
-    let pages_needed = (required_bytes - mem.size_in_bytes() + 65535) / 65536
-    let _ = mem.grow(pages_needed)
-  }
-
-  match mem.write_bytes(input_offset, input_data) {
-    Ok(_) => ()
-    Err(e) =>
-      return Err(
-        SecurityError::Aborted("Failed to write input slice: " + e.to_string()),
-      )
-  }
-
-  let args = [Value::I32(input_offset), Value::I32(input_data.length())]
-  let ret = match self.call(func_name, args) {
+  // Standard Extism Guest PDK ABI: `func() -> i32`
+  let ret = match self.call(func_name, []) {
     Ok(r) => r
     Err(e) => return Err(e)
   }
 
-  // If the slice function also set output via extism:host/env::output_set, prefer that
-  if self.extism_kernel.output_length > 0L {
-    let out_off = self.extism_kernel.output_offset.to_int()
-    let out_len = self.extism_kernel.output_length.to_int()
-    match self.extism_kernel.kernel_memory.read_bytes(out_off, out_len) {
-      Ok(out_bytes) => return Ok(out_bytes)
-      Err(e) =>
-        return Err(
-          SecurityError::Aborted(
-            "Failed to read Extism output slice: " + e.to_string(),
-          ),
-        )
-    }
+  match self.extism_kernel.error_message {
+    Some(err_msg) =>
+      return Err(SecurityError::Aborted("Extism plugin error: " + err_msg))
+    None => ()
   }
 
-  if ret.length() == 0 {
-    return Ok([])
-  }
-
-  match ret[0] {
-    Value::I32(out_off) => {
-      if out_off < 0 {
-        return Ok([])
-      }
-      let out_len = if ret.length() > 1 {
-        match ret[1] {
-          Value::I32(l) => l
-          _ => 0
-        }
-      } else {
-        match mem.read_i32(out_off) {
-          Ok(l) => l
-          Err(_) => 0
-        }
-      }
-
-      let read_offset = if ret.length() > 1 { out_off } else { out_off + 4 }
-      match mem.read_bytes(read_offset, out_len) {
-        Ok(out_bytes) => Ok(out_bytes)
-        Err(e) =>
-          Err(
+  if ret.length() > 0 {
+    match ret[0] {
+      Value::I32(rc) =>
+        if rc != 0 {
+          return Err(
             SecurityError::Aborted(
-              "Failed to read output slice: " + e.to_string(),
+              "Extism plugin returned non-zero status code: " + rc.to_string(),
             ),
           )
-      }
+        }
+      _ => ()
     }
-    _ => Ok([])
+  }
+
+  let out_off = self.extism_kernel.output_offset.to_int()
+  let out_len = self.extism_kernel.output_length.to_int()
+  if out_len <= 0 {
+    return Ok([])
+  }
+  match self.extism_kernel.kernel_memory.read_bytes(out_off, out_len) {
+    Ok(out_bytes) => Ok(out_bytes)
+    Err(e) =>
+      Err(
+        SecurityError::Aborted(
+          "Failed to read Extism output buffer: " + e.to_string(),
+        ),
+      )
   }
 }
 
