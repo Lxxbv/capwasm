@@ -97,37 +97,33 @@ test "plugin: instance reset reinitializes cleanly" {
 }
 
 ///|
-test "extism: kernel memory allocator, block reuse, and quota enforcement" {
+test "extism: isolated kernel memory allocator, block reuse, and quota enforcement" {
   let policy = @capwasm.CapabilityPolicyBuilder::new()
     .max_memory_pages(2)
     .build()
   let sec_guard = @capwasm.PluginSecurityGuard::new("extism-alloc-test", policy)
-  let mem = match
-    @capwasm.LinearMemory::new(@capwasm.Limits::{ min: 1, max: Some(4), }) {
-    Ok(m) => m
-    Err(_) => return
-  }
   let kernel = @capwasm.ExtismKernel::new()
+  let kmem = kernel.kernel_memory
 
-  // Allocate 64 bytes -> starts at heap base 8192
-  let off1 = match kernel.alloc(mem, Some(sec_guard), 64L) {
+  // Allocate 64 bytes -> starts at offset 64 in isolated kernel_memory
+  let off1 = match kernel.alloc(kmem, Some(sec_guard), 64L) {
     Ok(o) => o
     Err(_) => 0L
   }
-  assert_eq(off1, 8192L)
+  assert_eq(off1, 64L)
   assert_eq(kernel.block_length(off1), 64L)
 
-  // Free and re-allocate 32 bytes -> reuses block at 8192
+  // Free and re-allocate 32 bytes -> reuses block at 64
   kernel.free(off1)
   assert_eq(kernel.block_length(off1), 0L)
-  let off2 = match kernel.alloc(mem, Some(sec_guard), 32L) {
+  let off2 = match kernel.alloc(kmem, Some(sec_guard), 32L) {
     Ok(o) => o
     Err(_) => 0L
   }
-  assert_eq(off2, 8192L)
+  assert_eq(off2, 64L)
 
   // Request allocation exceeding 2-page (128 KiB) capability ceiling -> denied (returns 0L)
-  let huge = match kernel.alloc(mem, Some(sec_guard), 200000L) {
+  let huge = match kernel.alloc(kmem, Some(sec_guard), 200000L) {
     Ok(o) => o
     Err(_) => -1L
   }
@@ -248,10 +244,7 @@ test "extism: capability-gated http_request and config/var state store" {
   assert_eq(plugin.get_extism_var("counter"), Some([b'\x2a']))
 
   // Test Extism HTTP request capability enforcement via Linker-registered host function
-  let mem = match plugin.instance.get_memory(0) {
-    Ok(m) => m
-    Err(_) => return
-  }
+  let kmem = plugin.extism_kernel.kernel_memory
   let http_fn = match
     plugin.linker.resolve_func("extism:host/env", "http_request") {
     Some(f) => f
@@ -266,7 +259,7 @@ test "extism: capability-gated http_request and config/var state store" {
   // 1. Allowed request to api.moonbitlang.com -> HTTP 200 & valid response block
   let allowed_req_off = match
     plugin.extism_kernel.alloc_and_write_string(
-      mem,
+      kmem,
       Some(plugin.sec_guard),
       "{\"url\":\"https://api.moonbitlang.com/v1/packages\"}",
     ) {
@@ -284,7 +277,7 @@ test "extism: capability-gated http_request and config/var state store" {
   // 2. Unauthorized request to evil.attacker.org -> HTTP 403 & 0L response handle
   let blocked_req_off = match
     plugin.extism_kernel.alloc_and_write_string(
-      mem,
+      kmem,
       Some(plugin.sec_guard),
       "{\"url\":\"https://evil.attacker.org/exfiltrate\"}",
     ) {
@@ -368,7 +361,13 @@ test "manifest: ExtismManifest JSON parser, wildcard hosts, and path mount resol
 }
 
 ///|
-test "pdk & manifest: encode_to_bytes round-trip, FNV-1a hash check, WASI path_open & call_indirect" {
+test "pdk & manifest: encode_to_bytes round-trip, FIPS 180-4 SHA-256 hash check, WASI & call_indirect" {
+  // Verify NIST FIPS 180-4 SHA-256 standard vector: sha256("abc")
+  let abc_sha256 = @capwasm.compute_wasm_sha256([b'a', b'b', b'c'])
+  assert_eq(
+    abc_sha256, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  )
+
   // Construct a Wasm module using WasmModule AST + encode_to_bytes that:
   // 1. Imports wasi_snapshot_preview1::clock_time_get (type 0: (i32, i64, i32) -> i32)
   // 2. Defines a table of 2 functions and uses CallIndirect (type 1: (i32) -> i32)

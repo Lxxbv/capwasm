@@ -180,11 +180,11 @@ fn main {
 
   println("")
 
-  // Scenario 7: Extism Manifest JSON Loading, FNV-1a Binary Fingerprint & Virtual Path Mounts
+  // Scenario 7: Extism Manifest JSON Loading, SHA-256 Binary Integrity Verification & Virtual Path Mounts
   println(
-    "[Scenario 7] Loading Plugin via ExtismManifest JSON with FNV-1a Hash & Path Mounts...",
+    "[Scenario 7] Loading Plugin via ExtismManifest JSON with SHA-256 Digest & Path Mounts...",
   )
-  let wasm_hash = @capwasm.compute_wasm_fingerprint(extism_wasm)
+  let wasm_hash = @capwasm.compute_wasm_sha256(extism_wasm)
   let _ = vfs.create_file("/plugins/extism_upper.wasm", extism_wasm)
   let manifest_json =
     #|{
@@ -208,7 +208,7 @@ fn main {
           match m_plugin.call_string("run", "manifest") {
             Ok(out_str) =>
               println(
-                "  [PASS] Manifest-loaded plugin verified (FNV-1a=\{wasm_hash}) & executed: '\{out_str}'",
+                "  [PASS] Manifest-loaded plugin verified (SHA-256=\{wasm_hash}) & executed: '\{out_str}'",
               )
             Err(e) => println("  [FAIL] Execution failed: \{e}")
           }

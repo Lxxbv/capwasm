@@ -512,7 +512,7 @@ pub fn PluginInstance::call_extism(
     if out_len <= 0 {
       return Ok([])
     }
-    match mem.read_bytes(out_off, out_len) {
+    match self.extism_kernel.kernel_memory.read_bytes(out_off, out_len) {
       Ok(out_bytes) => return Ok(out_bytes)
       Err(e) =>
         return Err(
@@ -549,7 +549,7 @@ pub fn PluginInstance::call_extism(
   if self.extism_kernel.output_length > 0L {
     let out_off = self.extism_kernel.output_offset.to_int()
     let out_len = self.extism_kernel.output_length.to_int()
-    match mem.read_bytes(out_off, out_len) {
+    match self.extism_kernel.kernel_memory.read_bytes(out_off, out_len) {
       Ok(out_bytes) => return Ok(out_bytes)
       Err(e) =>
         return Err(

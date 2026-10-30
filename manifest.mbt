@@ -178,29 +178,132 @@ pub fn ExtismManifest::with_mount(
 }
 
 ///|
-/// Computes a deterministic 64-bit FNV-1a hex fingerprint for Wasm module integrity verification.
-pub fn compute_wasm_fingerprint(bytes : Array[Byte]) -> String {
-  let mut hash : UInt64 = 14695981039346656037UL
-  let prime : UInt64 = 1099511628211UL
+/// Right-rotates a 32-bit unsigned integer by `n` bits (for FIPS 180-4 SHA-256).
+fn rotr32(x : UInt32, n : Int32) -> UInt32 {
+  (x >> n) | (x << (32 - n))
+}
+
+///|
+/// Computes the standard FIPS 180-4 SHA-256 64-character lowercase hex digest
+/// required by the official Extism Manifest `wasm[].hash` specification.
+pub fn compute_wasm_sha256(bytes : Array[Byte]) -> String {
+  let k : Array[UInt32] = [
+    0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U,
+    0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+    0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U, 0xe49b69c1U, 0xefbe4786U,
+    0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+    0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U,
+    0x06ca6351U, 0x14292967U, 0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+    0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U, 0xa2bfe8a1U, 0xa81a664bU,
+    0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+    0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU,
+    0x5b9cca4fU, 0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+    0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U,
+  ]
+
+  let mut h0 : UInt32 = 0x6a09e667U
+  let mut h1 : UInt32 = 0xbb67ae85U
+  let mut h2 : UInt32 = 0x3c6ef372U
+  let mut h3 : UInt32 = 0xa54ff53aU
+  let mut h4 : UInt32 = 0x510e527fU
+  let mut h5 : UInt32 = 0x9b05688cU
+  let mut h6 : UInt32 = 0x1f83d9abU
+  let mut h7 : UInt32 = 0x5be0cd19U
+
+  // Pre-processing: pad message to multiple of 64 bytes (512 bits)
+  let padded : Array[Byte] = []
   for b in bytes {
-    hash = (hash ^ b.to_uint64()) * prime
+    padded.push(b)
   }
+  padded.push(b'\x80')
+  while padded.length() % 64 != 56 {
+    padded.push(b'\x00')
+  }
+  let bit_len : UInt64 = bytes.length().to_uint64() * 8UL
+  for shift = 56; shift >= 0; shift = shift - 8 {
+    padded.push(((bit_len >> shift) & 0xFFUL).to_int().to_byte())
+  }
+
+  let w = Array::make(64, 0U)
+  let num_chunks = padded.length() / 64
+  for chunk = 0; chunk < num_chunks; chunk = chunk + 1 {
+    let base = chunk * 64
+    for i = 0; i < 16; i = i + 1 {
+      let off = base + i * 4
+      let b0 = padded[off].to_int().reinterpret_as_uint()
+      let b1 = padded[off + 1].to_int().reinterpret_as_uint()
+      let b2 = padded[off + 2].to_int().reinterpret_as_uint()
+      let b3 = padded[off + 3].to_int().reinterpret_as_uint()
+      w[i] = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+    }
+    for i = 16; i < 64; i = i + 1 {
+      let s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3)
+      let s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10)
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1
+    }
+
+    let mut a = h0
+    let mut b = h1
+    let mut c = h2
+    let mut d = h3
+    let mut e = h4
+    let mut f = h5
+    let mut g = h6
+    let mut h = h7
+
+    for i = 0; i < 64; i = i + 1 {
+      let s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+      let ch = (e & f) ^ (e.lnot() & g)
+      let temp1 = h + s1 + ch + k[i] + w[i]
+      let s0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)
+      let maj = (a & b) ^ (a & c) ^ (b & c)
+      let temp2 = s0 + maj
+
+      h = g
+      g = f
+      f = e
+      e = d + temp1
+      d = c
+      c = b
+      b = a
+      a = temp1 + temp2
+    }
+
+    h0 = h0 + a
+    h1 = h1 + b
+    h2 = h2 + c
+    h3 = h3 + d
+    h4 = h4 + e
+    h5 = h5 + f
+    h6 = h6 + g
+    h7 = h7 + h
+  }
+
+  let words : Array[UInt32] = [h0, h1, h2, h3, h4, h5, h6, h7]
   let hex_chars = "0123456789abcdef"
   let buf = StringBuilder::new()
-  for i = 15; i >= 0; i = i - 1 {
-    let nibble = ((hash >> (i * 4)) & 0xFUL).to_int()
-    buf.write_char(hex_chars[nibble].unsafe_to_char())
+  for word in words {
+    for nibble_idx = 7; nibble_idx >= 0; nibble_idx = nibble_idx - 1 {
+      let nib = ((word >> (nibble_idx * 4)) & 0xFU).reinterpret_as_int()
+      buf.write_char(hex_chars[nib].to_int().unsafe_to_char())
+    }
   }
   buf.to_string()
 }
 
 ///|
-/// Verifies that a Wasm binary matches the expected manifest fingerprint.
+/// Computes the standard SHA-256 hex digest for Wasm module integrity verification.
+pub fn compute_wasm_fingerprint(bytes : Array[Byte]) -> String {
+  compute_wasm_sha256(bytes)
+}
+
+///|
+/// Verifies that a Wasm binary matches the expected Extism Manifest SHA-256 digest.
 pub fn verify_wasm_fingerprint(
   bytes : Array[Byte],
   expected_hex : String,
 ) -> Bool {
-  compute_wasm_fingerprint(bytes) == expected_hex
+  compute_wasm_sha256(bytes) == expected_hex
 }
 
 ///|

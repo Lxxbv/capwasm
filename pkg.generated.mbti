@@ -10,6 +10,8 @@ pub fn canonicalize_path(String) -> Result[String, SecurityError]
 
 pub fn compute_wasm_fingerprint(Array[Byte]) -> String
 
+pub fn compute_wasm_sha256(Array[Byte]) -> String
+
 pub fn encode_instruction(Array[Byte], Instruction) -> Unit
 
 pub fn extract_host_from_extism_request(String) -> String
@@ -229,6 +231,7 @@ pub(all) struct ExtismHttpResponse {
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ExtismKernel {
+  kernel_memory : LinearMemory
   blocks : Array[ExtismMemBlock]
   mut next_alloc_offset : Int64
   mut input_data : Array[Byte]

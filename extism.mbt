@@ -34,8 +34,12 @@ pub(all) struct ExtismHttpResponse {
 } derive(Debug, Eq)
 
 ///|
-/// ExtismKernel manages the host-side state and memory allocation table for Extism PDK plugins.
+/// ExtismKernel manages the isolated Host/Kernel Memory Arena (`kernel_memory`),
+/// block descriptor table, and state stores for standard Extism PDK plugins.
+/// Unlike shared-memory designs that overwrite guest `memory[0]`, `kernel_memory`
+/// is strictly separate from the guest's linear memory so guest stack/heap is never corrupted.
 pub(all) struct ExtismKernel {
+  kernel_memory : LinearMemory
   blocks : Array[ExtismMemBlock]
   mut next_alloc_offset : Int64
   mut input_data : Array[Byte]
@@ -54,9 +58,13 @@ pub(all) struct ExtismKernel {
 ///|
 pub fn ExtismKernel::new() -> ExtismKernel {
   {
+    kernel_memory: {
+      data: Array::make(page_size, b'\x00'),
+      limits: { min: 1, max: None, },
+    },
     blocks: [],
-    // Start Extism kernel heap at 8192 (8 KiB) to avoid colliding with low data segments
-    next_alloc_offset: 8192L,
+    // Offset 0L is reserved as the null handle in Extism ABI; blocks start at 64L in isolated kernel_memory
+    next_alloc_offset: 64L,
     input_data: [],
     output_offset: 0L,
     output_length: 0L,
@@ -405,7 +413,7 @@ pub fn register_extism_host_functions(
       ns,
       "alloc",
       HostFunction::new(FuncType::new([ValueType::I64], [ValueType::I64]), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let len = match args[0] {
@@ -413,11 +421,8 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let off = match kernel.alloc(mem, Some(sec_guard), len) {
+        let off = match
+          kernel.alloc(kernel.kernel_memory, Some(sec_guard), len) {
           Ok(o) => o
           Err(e) => return Err(e)
         }
@@ -479,7 +484,7 @@ pub fn register_extism_host_functions(
       ns,
       "load_u8",
       HostFunction::new(FuncType::new([ValueType::I64], [ValueType::I32]), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let off = match args[0] {
@@ -487,11 +492,7 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v
           _ => 0
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let b = match mem.read_u8(off) {
+        let b = match kernel.kernel_memory.read_u8(off) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -504,7 +505,7 @@ pub fn register_extism_host_functions(
       ns,
       "load_u64",
       HostFunction::new(FuncType::new([ValueType::I64], [ValueType::I64]), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let off = match args[0] {
@@ -512,11 +513,7 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v
           _ => 0
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let v = match mem.read_i64(off) {
+        let v = match kernel.kernel_memory.read_i64(off) {
           Ok(val) => val
           Err(e) => return Err(e)
         }
@@ -529,7 +526,7 @@ pub fn register_extism_host_functions(
       ns,
       "store_u8",
       HostFunction::new(FuncType::new([ValueType::I64, ValueType::I32], []), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let off = match args[0] {
@@ -542,11 +539,7 @@ pub fn register_extism_host_functions(
           Value::I64(v) => v.to_int()
           _ => 0
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        match mem.write_u8(off, val) {
+        match kernel.kernel_memory.write_u8(off, val) {
           Ok(_) => Ok([])
           Err(e) => Err(e)
         }
@@ -558,7 +551,7 @@ pub fn register_extism_host_functions(
       ns,
       "store_u64",
       HostFunction::new(FuncType::new([ValueType::I64, ValueType::I64], []), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let off = match args[0] {
@@ -571,11 +564,7 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        match mem.write_i64(off, val) {
+        match kernel.kernel_memory.write_i64(off, val) {
           Ok(_) => Ok([])
           Err(e) => Err(e)
         }
@@ -610,17 +599,13 @@ pub fn register_extism_host_functions(
     linker.register_func(
       ns,
       "error_set",
-      HostFunction::new(FuncType::new([ValueType::I64], []), fn(ctx, args) {
+      HostFunction::new(FuncType::new([ValueType::I64], []), fn(_ctx, args) {
         let off = match args[0] {
           Value::I64(v) => v
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let msg = match kernel.read_block_string(mem, off) {
+        let msg = match kernel.read_block_string(kernel.kernel_memory, off) {
           Ok(s) => s
           Err(_) => "Unknown Extism plugin error"
         }
@@ -634,7 +619,7 @@ pub fn register_extism_host_functions(
       ns,
       "config_get",
       HostFunction::new(FuncType::new([ValueType::I64], [ValueType::I64]), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let key_off = match args[0] {
@@ -642,17 +627,19 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let key = match kernel.read_block_string(mem, key_off) {
+        let key = match
+          kernel.read_block_string(kernel.kernel_memory, key_off) {
           Ok(s) => s
           Err(e) => return Err(e)
         }
         match kernel.get_config(key) {
           Some(val) =>
-            match kernel.alloc_and_write_string(mem, Some(sec_guard), val) {
+            match
+              kernel.alloc_and_write_string(
+                kernel.kernel_memory,
+                Some(sec_guard),
+                val,
+              ) {
               Ok(off) => Ok([Value::I64(off)])
               Err(e) => Err(e)
             }
@@ -666,7 +653,7 @@ pub fn register_extism_host_functions(
       ns,
       "var_get",
       HostFunction::new(FuncType::new([ValueType::I64], [ValueType::I64]), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let key_off = match args[0] {
@@ -674,17 +661,19 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let key = match kernel.read_block_string(mem, key_off) {
+        let key = match
+          kernel.read_block_string(kernel.kernel_memory, key_off) {
           Ok(s) => s
           Err(e) => return Err(e)
         }
         match kernel.get_var(key) {
           Some(bytes) =>
-            match kernel.alloc_and_write_bytes(mem, Some(sec_guard), bytes) {
+            match
+              kernel.alloc_and_write_bytes(
+                kernel.kernel_memory,
+                Some(sec_guard),
+                bytes,
+              ) {
               Ok(off) => Ok([Value::I64(off)])
               Err(e) => Err(e)
             }
@@ -698,7 +687,7 @@ pub fn register_extism_host_functions(
       ns,
       "var_set",
       HostFunction::new(FuncType::new([ValueType::I64, ValueType::I64], []), fn(
-        ctx,
+        _ctx,
         args,
       ) {
         let key_off = match args[0] {
@@ -711,11 +700,8 @@ pub fn register_extism_host_functions(
           Value::I32(v) => v.to_int64()
           _ => 0L
         }
-        let mem = match ctx.get_memory() {
-          Ok(m) => m
-          Err(e) => return Err(e)
-        }
-        let key = match kernel.read_block_string(mem, key_off) {
+        let key = match
+          kernel.read_block_string(kernel.kernel_memory, key_off) {
           Ok(s) => s
           Err(e) => return Err(e)
         }
@@ -724,7 +710,8 @@ pub fn register_extism_host_functions(
           kernel.set_var(key, [])
           return Ok([])
         }
-        let bytes = match mem.read_bytes(val_off.to_int(), val_len.to_int()) {
+        let bytes = match
+          kernel.kernel_memory.read_bytes(val_off.to_int(), val_len.to_int()) {
           Ok(b) => b
           Err(e) => return Err(e)
         }
@@ -753,7 +740,7 @@ pub fn register_extism_host_functions(
       "http_request",
       HostFunction::new(
         FuncType::new([ValueType::I64, ValueType::I64], [ValueType::I64]),
-        fn(ctx, args) {
+        fn(_ctx, args) {
           let req_off = match args[0] {
             Value::I64(v) => v
             Value::I32(v) => v.to_int64()
@@ -764,18 +751,19 @@ pub fn register_extism_host_functions(
             Value::I32(v) => v.to_int64()
             _ => 0L
           }
-          let mem = match ctx.get_memory() {
-            Ok(m) => m
-            Err(e) => return Err(e)
-          }
-          let req_str = match kernel.read_block_string(mem, req_off) {
+          let req_str = match
+            kernel.read_block_string(kernel.kernel_memory, req_off) {
             Ok(s) => s
             Err(e) => return Err(e)
           }
           let req_body : Array[Byte] = if body_off > 0L {
             let blen = kernel.block_length(body_off)
             if blen > 0L {
-              match mem.read_bytes(body_off.to_int(), blen.to_int()) {
+              match
+                kernel.kernel_memory.read_bytes(
+                  body_off.to_int(),
+                  blen.to_int(),
+                ) {
                 Ok(b) => b
                 Err(_) => []
               }
@@ -804,7 +792,7 @@ pub fn register_extism_host_functions(
                   }
                   match
                     kernel.alloc_and_write_bytes(
-                      mem,
+                      kernel.kernel_memory,
                       Some(sec_guard),
                       resp_obj.body,
                     ) {
@@ -822,7 +810,11 @@ pub fn register_extism_host_functions(
                     return Ok([Value::I64(0L)])
                   }
                   match
-                    kernel.alloc_and_write_string(mem, Some(sec_guard), resp) {
+                    kernel.alloc_and_write_string(
+                      kernel.kernel_memory,
+                      Some(sec_guard),
+                      resp,
+                    ) {
                     Ok(off) => Ok([Value::I64(off)])
                     Err(e) => Err(e)
                   }
@@ -858,17 +850,13 @@ pub fn register_extism_host_functions(
       linker.register_func(
         ns,
         fn_name,
-        HostFunction::new(FuncType::new([ValueType::I64], []), fn(ctx, args) {
+        HostFunction::new(FuncType::new([ValueType::I64], []), fn(_ctx, args) {
           let off = match args[0] {
             Value::I64(v) => v
             Value::I32(v) => v.to_int64()
             _ => 0L
           }
-          let mem = match ctx.get_memory() {
-            Ok(m) => m
-            Err(e) => return Err(e)
-          }
-          let msg = match kernel.read_block_string(mem, off) {
+          let msg = match kernel.read_block_string(kernel.kernel_memory, off) {
             Ok(s) => s
             Err(_) => "<invalid log block>"
           }
